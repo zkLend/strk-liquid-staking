@@ -32,3 +32,129 @@ In a nutshell, the protocol functions by collecting funds from users and _delega
                            │                   │
                            └────Rewards────────┘
 ```
+
+The diagram above, however, is an oversimplification. Due to the fixed delay imposed on undelegation, the protocol employes a [trenching mechanism](#trenching) to handle fund inflows and outflows.
+
+## Trenching
+
+The need for trenching arises from the fact that partial undelegation requests are not queued. Whenever a new undelegation request is made, the current in-flight request is overwritten and the whole 21-day countdown restarts. While this works fine for individuals, it apparently wouldn't work for the liquid staking protocol where frequent withdrawals are expected.
+
+As a result, instead of treating the whole pool of funds as one, the protocol divides it into _trenches_, with each trench being of a fixed size. The protocol only delegates or undelegates in the unit of trenches. A trench that is not full is called an _open trench_. There's _always_ an open trench in the protocol. When the protocol is first deployed, it contains a single trench that's open and empty.
+
+### Deposit
+
+No delegation happens before this first trench is fully filled:
+
+```
+               ┌─Trench─#0─────────────────────┬────────────────────┐              ┌────────────┐
+               │                               │                    │              │            │
+               │                               │                    │              │  Staker 1  │
+───Deposit─────►                               │                    │              │            │
+               │                               │                    │              └────────────┘
+               │         Filled                │       Empty        │
+               │                               │                    │
+               │                               │                    │
+               │                               │                    │
+               │                               │                    │
+               └───────────────────────────────┴────────────────────┘
+```
+
+When a deposit causes the open trench to be full, delegation happens atomically. Excess deposit, if any, goes into the newly open trench:
+
+```
+               ┌─Trench─#0──────────────────────────────────────────┐              ┌────────────┐
+               │                                                    │              │            │
+               │                                                    ├──────────────►  Staker 1  │
+───Deposit─┬───►                                                    │              │            │
+           │   │                                                    │              └────────────┘
+           │   │                       Full                         │
+           │   │                                                    │
+           │   │                                                    │
+           │   │                                                    │
+           │   │                                                    │
+           │   └────────────────────────────────────────────────────┘
+           │
+           │
+           │   ┌─Trench─#1─────────────────────┬────────────────────┐
+           │   │                               │                    │
+           │   │                               │                    │
+           └───►                               │                    │
+               │                               │                    │
+               │         Filled                │       Empty        │
+               │                               │                    │
+               │                               │                    │
+               │                               │                    │
+               │                               │                    │
+               └───────────────────────────────┴────────────────────┘
+```
+
+### Reward collection
+
+Staking rewards collected go into the open trench:
+
+```
+┌─Trench─#0──────────────────────────────────────────┐              ┌────────────┐
+│                                                    │              │            │
+│                                                    ├───Delegated──►  Staker 1  │
+│                                                    │              │            │
+│                                                    │              └─────┬──────┘
+│                       Full                         │                    │
+│                                                    │                    │
+│                                                    │                    │
+│                                                    │                    │
+│                                                    │                    │
+└────────────────────────────────────────────────────┘                    │
+                                                                          │
+                                                                          │
+┌─Trench─#1──────────────────────┬───────────────────┐                    │
+│                                │                   │                    │
+│                                │                   │                    │
+│                                │                   │                    │
+│                                │                   │                    │
+│            Filled              │       Empty       ◄─────Rewards────────┘
+│                                │                   │
+│                                │                   │
+│                                │                   │
+│                                │                   │
+└────────────────────────────────┴───────────────────┘
+```
+
+> [!NOTE]
+>
+> Any action that causes a trench to become full results in delegation, including reward collections.
+
+### Withdrawal
+
+The protocol maintains a _withdrawal queue_. Whenever a user makes a withdrawal request by burning the deposit certificate token, the following happens:
+
+1. If the queue is empty, the protocol takes as much funds as needed from the open trench in an attempt to fulfill the request.
+2. If the request is still not fulfilled after step 1, it's queued to wait for a fulfillment.
+
+There are several ways that withdrawal requests in the queue can be fulfilled:
+
+- **New deposits**
+
+  The [Deposit](#deposit) section from above is another oversimplification. When the protocol receives a new deposit, instead of directly filling a trench, it would attempt to fulfill as many withdrawal requests as possible. Only when the queue becomes empty the excess deposits would be directed into a trench.
+
+- **Trench deactivation**
+
+  Whenever a new item is queued into the withdrawal queue, the protocol checks whether the _inflight undelegating trenches_ represent enough funds to cover all requests in the queue. If not, the undelegation process is started for more trenches.
+
+  When a trench finishes the undelegation delay, its funds are used to fulfill the withdrawal queue. Excess funds, if any, go into the open trench.
+
+### Invariants
+
+Based on the above rules, given a trench size of _T_, it can be concluded that these invariants hold at any given moment in the protocol.
+
+1. Either the open trench or the withdrawal queue is empty.
+2. Denote as _U_ the number of inflight undelegating trenches, and _W_ the total amount of funds in the withdrawal queue, then this holds: `W <= U * T`.
+
+> [!NOTE]
+>
+> It's possible that there are more inflight undelegating trenches than needed for the entirety of the withdrawal queue (i.e. `W <= (U - 1) * T`). This is normal and can be caused by the queue being (partially) fulfilled by new deposits.
+
+### Trench size considerations
+
+It's important to decide on a trench size that's well balanced. Since the open trench does not earn rewards, a trench size that's too large causes the overall yield of the protocol to be unnecessarily low; on the other hand, a trench size that's too small causes additional operational overhead as more contract calls are involved in routine actions such as reward collections.
+
+In the future, the ability to change the trench size should be developed to allow the protocol to scale efficiently.
