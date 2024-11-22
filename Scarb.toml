@@ -6,6 +6,16 @@ cairo-version = "2.8.5"
 
 [dependencies]
 starknet = "2.8.5"
+contracts = { git = "https://github.com/starkware-libs/starknet-staking", rev = "82e19a1" }
 
 [dev-dependencies]
 cairo_test = "2.8.5"
+snforge_std = "0.33.0"
+
+[scripts]
+test = "snforge test"
+
+[[tool.snforge.fork]]
+name = "SEPOLIA_332200"
+url = "https://starknet-sepolia.public.blastapi.io/rpc/v0_7"
+block_id.number = "332200"
