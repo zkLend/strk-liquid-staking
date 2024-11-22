@@ -155,5 +155,6 @@ name = "strk_liquid_staking"
 version = "0.1.0"
 dependencies = [
  "contracts",
+ "openzeppelin",
  "snforge_std",
 ]
