@@ -4,6 +4,7 @@ use starknet::syscalls::deploy_syscall;
 
 use contracts::types::{Amount, Commission};
 use snforge_std::DeclareResultTrait;
+use strk_liquid_staking::pool::interface::{UnstakeResult, WithdrawResult};
 
 mod account;
 use account::{IMockAccountContractDispatcher, IMockAccountContractDispatcherTrait};
@@ -54,9 +55,9 @@ pub trait IMockAccountStakingCaller {
 pub trait IMockAccountPoolCaller {
     fn stake(self: @MockAccountPoolCaller, amount: u128);
 
-    fn unstake(self: @MockAccountPoolCaller, amount: u128) -> u128;
+    fn unstake(self: @MockAccountPoolCaller, amount: u128) -> UnstakeResult;
 
-    fn withdraw(self: @MockAccountPoolCaller, withdrawal_id: u128);
+    fn withdraw(self: @MockAccountPoolCaller, queue_id: u128) -> WithdrawResult;
 
     fn set_staker(self: @MockAccountPoolCaller, staker: ContractAddress);
 }
@@ -124,14 +125,14 @@ impl IMockAccountPoolCallerImpl of IMockAccountPoolCaller {
             .pool_stake(*self.pool_address, amount)
     }
 
-    fn unstake(self: @MockAccountPoolCaller, amount: u128) -> u128 {
+    fn unstake(self: @MockAccountPoolCaller, amount: u128) -> UnstakeResult {
         IMockAccountContractDispatcher { contract_address: *self.account_address }
             .pool_unstake(*self.pool_address, amount)
     }
 
-    fn withdraw(self: @MockAccountPoolCaller, withdrawal_id: u128) {
+    fn withdraw(self: @MockAccountPoolCaller, queue_id: u128) -> WithdrawResult {
         IMockAccountContractDispatcher { contract_address: *self.account_address }
-            .pool_withdraw(*self.pool_address, withdrawal_id)
+            .pool_withdraw(*self.pool_address, queue_id)
     }
 
     fn set_staker(self: @MockAccountPoolCaller, staker: ContractAddress) {

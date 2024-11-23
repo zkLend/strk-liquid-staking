@@ -28,3 +28,84 @@ fn test_simple_staking() {
 
     assert!(contracts.pool.get_proxy(2).is_none());
 }
+
+#[test]
+#[fork("SEPOLIA_332200")]
+fn test_fully_fulfilled_unstake() {
+    let Setup { contracts, accounts } = setup_sepolia();
+
+    let stake_amount = 225_000000000000000000_u128;
+    accounts.alice.strk.approve(contracts.pool.contract_address, stake_amount.into());
+    accounts.alice.pool.stake(stake_amount);
+
+    // Alice balance: 775
+    // Open trench balance: 25
+    assert_eq!(contracts.strk.balance_of(accounts.alice.address), 775_000000000000000000);
+    assert_eq!(contracts.pool.get_open_trench_balance(), 25_000000000000000000);
+    assert_eq!(contracts.pool.get_total_stake(), 225_000000000000000000);
+
+    // Alice withdraws 10 STRK which can be immediately fully fulfilled
+    let result = accounts.alice.pool.unstake(10_000000000000000000_u128);
+    assert_eq!(result.total_amount, 10_000000000000000000);
+    assert_eq!(result.amount_fulfilled, 10_000000000000000000);
+
+    // Alice balance: 785
+    // Open trench balance: 15
+    assert_eq!(contracts.strk.balance_of(accounts.alice.address), 785_000000000000000000);
+    assert_eq!(contracts.pool.get_open_trench_balance(), 15_000000000000000000);
+    assert_eq!(contracts.pool.get_total_stake(), 215_000000000000000000);
+}
+
+#[test]
+#[fork("SEPOLIA_332200")]
+fn test_partially_fulfilled_unstake() {
+    let Setup { contracts, accounts } = setup_sepolia();
+
+    let stake_amount = 225_000000000000000000_u128;
+    accounts.alice.strk.approve(contracts.pool.contract_address, stake_amount.into());
+    accounts.alice.pool.stake(stake_amount);
+
+    // Alice balance: 775
+    // Open trench balance: 25
+    assert_eq!(contracts.strk.balance_of(accounts.alice.address), 775_000000000000000000);
+    assert_eq!(contracts.pool.get_open_trench_balance(), 25_000000000000000000);
+    assert_eq!(contracts.pool.get_total_stake(), 225_000000000000000000);
+
+    // Alice withdraws 30 STRK which can be partially fulfilled
+    let result = accounts.alice.pool.unstake(30_000000000000000000_u128);
+    assert_eq!(result.total_amount, 30_000000000000000000);
+    assert_eq!(result.amount_fulfilled, 25_000000000000000000);
+
+    // Alice balance: 800
+    // Open trench balance: 0
+    assert_eq!(contracts.strk.balance_of(accounts.alice.address), 800_000000000000000000);
+    assert_eq!(contracts.pool.get_open_trench_balance(), 0);
+    assert_eq!(contracts.pool.get_total_stake(), 200_000000000000000000);
+}
+
+#[test]
+#[fork("SEPOLIA_332200")]
+fn test_unfulfilled_unstake() {
+    let Setup { contracts, accounts } = setup_sepolia();
+
+    let stake_amount = 200_000000000000000000_u128;
+    accounts.alice.strk.approve(contracts.pool.contract_address, stake_amount.into());
+    accounts.alice.pool.stake(stake_amount);
+
+    // Alice balance: 800
+    // Open trench balance: 0
+    assert_eq!(contracts.strk.balance_of(accounts.alice.address), 800_000000000000000000);
+    assert_eq!(contracts.pool.get_open_trench_balance(), 0);
+    assert_eq!(contracts.pool.get_total_stake(), 200_000000000000000000);
+
+    // Alice withdraws 10 STRK where none can be fulfilled
+    let result = accounts.alice.pool.unstake(10_000000000000000000_u128);
+    assert_eq!(result.total_amount, 10_000000000000000000);
+    assert_eq!(result.amount_fulfilled, 0);
+
+    // Alice balance: 800
+    // Open trench balance: 0
+    assert_eq!(contracts.strk.balance_of(accounts.alice.address), 800_000000000000000000);
+    assert_eq!(contracts.pool.get_open_trench_balance(), 0);
+    assert_eq!(contracts.pool.get_total_stake(), 200_000000000000000000);
+}

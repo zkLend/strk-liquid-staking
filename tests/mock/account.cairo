@@ -1,6 +1,7 @@
 use starknet::ContractAddress;
 
 use contracts::types::{Amount, Commission};
+use strk_liquid_staking::pool::interface::{UnstakeResult, WithdrawResult};
 
 #[starknet::interface]
 pub trait IMockAccountContract<TContractState> {
@@ -27,9 +28,13 @@ pub trait IMockAccountContract<TContractState> {
 
     fn pool_stake(ref self: TContractState, contract: ContractAddress, amount: u128);
 
-    fn pool_unstake(ref self: TContractState, contract: ContractAddress, amount: u128) -> u128;
+    fn pool_unstake(
+        ref self: TContractState, contract: ContractAddress, amount: u128
+    ) -> UnstakeResult;
 
-    fn pool_withdraw(ref self: TContractState, contract: ContractAddress, withdrawal_id: u128);
+    fn pool_withdraw(
+        ref self: TContractState, contract: ContractAddress, queue_id: u128
+    ) -> WithdrawResult;
 
     fn pool_set_staker(
         ref self: TContractState, contract: ContractAddress, staker: ContractAddress
@@ -43,7 +48,9 @@ pub mod MockAccountContract {
     use contracts::types::{Amount, Commission};
     use contracts::staking::interface::{IStakingDispatcher, IStakingDispatcherTrait};
     use strk_liquid_staking::interfaces::{IERC20Dispatcher, IERC20DispatcherTrait};
-    use strk_liquid_staking::pool::interface::{IPoolDispatcher, IPoolDispatcherTrait};
+    use strk_liquid_staking::pool::interface::{
+        IPoolDispatcher, IPoolDispatcherTrait, UnstakeResult, WithdrawResult
+    };
 
     use super::IMockAccountContract;
 
@@ -87,12 +94,16 @@ pub mod MockAccountContract {
             IPoolDispatcher { contract_address: contract }.stake(amount)
         }
 
-        fn pool_unstake(ref self: ContractState, contract: ContractAddress, amount: u128) -> u128 {
+        fn pool_unstake(
+            ref self: ContractState, contract: ContractAddress, amount: u128
+        ) -> UnstakeResult {
             IPoolDispatcher { contract_address: contract }.unstake(amount)
         }
 
-        fn pool_withdraw(ref self: ContractState, contract: ContractAddress, withdrawal_id: u128) {
-            IPoolDispatcher { contract_address: contract }.withdraw(withdrawal_id)
+        fn pool_withdraw(
+            ref self: ContractState, contract: ContractAddress, queue_id: u128
+        ) -> WithdrawResult {
+            IPoolDispatcher { contract_address: contract }.withdraw(queue_id)
         }
 
         fn pool_set_staker(

@@ -19,24 +19,24 @@
 /// changes in the staking protocol.
 #[starknet::contract]
 pub mod Pool {
-    use contracts::staking::interface::IStakingDispatcherTrait;
+    use core::cmp::min;
     use core::num::traits::Zero;
     use starknet::{ClassHash, ContractAddress};
-    use starknet::{get_caller_address, get_contract_address};
+    use starknet::{contract_address_const, get_caller_address, get_contract_address};
     use starknet::storage::{
         Map, StorageMapReadAccess, StorageMapWriteAccess, StoragePointerReadAccess,
         StoragePointerWriteAccess
     };
     use starknet::syscalls::deploy_syscall;
 
-    use contracts::staking::interface::IStakingDispatcher;
+    use contracts::staking::interface::{IStakingDispatcher, IStakingDispatcherTrait};
     use contracts::pool::interface::{IPoolDispatcher as IDelegationPoolDispatcher};
     use openzeppelin::access::ownable::OwnableComponent;
     use openzeppelin::security::reentrancyguard::ReentrancyGuardComponent;
     use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
     use openzeppelin::upgrades::interface::IUpgradeable;
     use openzeppelin::upgrades::upgradeable::UpgradeableComponent;
-    use strk_liquid_staking::pool::interface::{IPool, Proxy};
+    use strk_liquid_staking::pool::interface::{IPool, Proxy, UnstakeResult, WithdrawResult};
     use strk_liquid_staking::proxy::interface::{IProxyDispatcher, IProxyDispatcherTrait};
     use strk_liquid_staking::staked_token::interface::{
         IStakedTokenDispatcher, IStakedTokenDispatcherTrait
@@ -67,6 +67,46 @@ pub mod Pool {
         proxy_class_hash: ClassHash,
         proxy_count: u128,
         proxies: Map<u128, Proxy>,
+        queued_withdrawal_count: u128,
+        active_queued_withdrawal_cursor: u128,
+        /// The total size of the withdrawal queue, including the interally-fulfilled but not yet
+        /// withdrawn amounts.
+        ///
+        /// This value is equal to the sum of the `amount_remaining` field of all items in
+        /// `queued_withdrawals`.
+        withdrawal_queue_total_size: u128,
+        /// The size of withdrawable part of the withdrawal queue, where funds are
+        /// internally-fulfilled but not yet withdrawn by the recipient.
+        ///
+        /// This value is equal to the sum of the `amount_withdrawable` field of all items in
+        /// `queued_withdrawals`.
+        withdrawal_queue_withdrawable_size: u128,
+        queued_withdrawals: Map<u128, QueuedWithdrawal>,
+    }
+
+    #[derive(Drop, starknet::Store)]
+    struct QueuedWithdrawal {
+        recipient: ContractAddress,
+        /// The total amount represented by this queue item, _INCLUDING_ the amount represented as
+        /// `amount_withdrawable`.
+        amount_remaining: u128,
+        /// Amount immediately withdrawable _ONLY FOR THE ACTIVE QUEUE ITEM_.
+        ///
+        /// For non-active queue items, this field _MEANS NOTHING_. For these items:
+        ///
+        /// - if the item is ahead of the active item, the whole `amount_remaining` is withdrawable;
+        /// - if the item is behind the active item, nothing is withdrawable.
+        ///
+        /// This field is designed like so as an optimization to avoid having to bulk update a large
+        /// number of storage slots when many queued items are fulfilled at the same time. With such
+        /// a design, only the cursor of the active item as well as the `amount_withdrawable` field
+        /// of the newly-active item need to be updated. There's no need to even update the
+        /// previously-active item's `amount_withdrawable` field.
+        ///
+        /// In the ideal case where the whole queue is cleared, there would be no new active item as
+        /// the cursor moves to after the last item. In this case, only one storage slot update is
+        /// needed.
+        amount_withdrawable: u128,
     }
 
     #[event]
@@ -79,6 +119,7 @@ pub mod Pool {
         #[flat]
         UpgradeableEvent: UpgradeableComponent::Event,
         StakerUpdated: StakerUpdated,
+        // TODO: add events for offchain indexing
     }
 
     #[derive(Drop, starknet::Event)]
@@ -96,6 +137,7 @@ pub mod Pool {
         pub const TRANSFER_FAILED: felt252 = 'PL_TRANSFER_FAILED';
         pub const POOL_BALANCE_OVERFLOW: felt252 = 'PL_POOL_BALANCE_OVERFLOW';
         pub const DELEGATION_NOT_OPEN: felt252 = 'PL_DELEGATION_NOT_OPEN';
+        pub const NOT_RECIPIENT: felt252 = 'PL_NOT_RECIPIENT';
     }
 
     #[constructor]
@@ -130,17 +172,18 @@ pub mod Pool {
             ReentrancyGuardComponent::InternalTrait::end(ref self.reentrancy_guard);
         }
 
-        fn unstake(ref self: ContractState, amount: u128) -> u128 {
+        fn unstake(ref self: ContractState, amount: u128) -> UnstakeResult {
             ReentrancyGuardComponent::InternalTrait::start(ref self.reentrancy_guard);
             let ret = EntrypointTrait::unstake(ref self, amount);
             ReentrancyGuardComponent::InternalTrait::end(ref self.reentrancy_guard);
             ret
         }
 
-        fn withdraw(ref self: ContractState, withdrawal_id: u128) {
+        fn withdraw(ref self: ContractState, queue_id: u128) -> WithdrawResult {
             ReentrancyGuardComponent::InternalTrait::start(ref self.reentrancy_guard);
-            EntrypointTrait::withdraw(ref self, withdrawal_id);
+            let ret = EntrypointTrait::withdraw(ref self, queue_id);
             ReentrancyGuardComponent::InternalTrait::end(ref self.reentrancy_guard);
+            ret
         }
 
         fn set_staker(ref self: ContractState, staker: ContractAddress) {
@@ -162,6 +205,7 @@ pub mod Pool {
         }
 
         fn get_total_stake(self: @ContractState) -> u128 {
+            // TODO: account for amount pending withdrawal
             self
                 .strk_token
                 .read()
@@ -169,6 +213,10 @@ pub mod Pool {
                 .try_into()
                 .expect(Errors::POOL_BALANCE_OVERFLOW)
                 + (self.trench_size.read() * self.proxy_count.read())
+        }
+
+        fn get_open_trench_balance(self: @ContractState) -> u128 {
+            InternalTrait::get_open_trench_balance(self)
         }
     }
 
@@ -201,11 +249,56 @@ pub mod Pool {
             self.settle_open_trench();
         }
 
-        fn unstake(ref self: ContractState, amount: u128) -> u128 {
-            0
+        fn unstake(ref self: ContractState, amount: u128) -> UnstakeResult {
+            let staker = get_caller_address();
+            assert(!staker.is_zero(), Errors::ZERO_STAKER);
+            assert(!amount.is_zero(), Errors::ZERO_AMOUNT);
+
+            let staked_token = self.staked_token.read();
+            staked_token.burn(staker, amount.into());
+
+            // TODO: calculate correct proportional amount
+            let unstake_amount = amount;
+
+            // Queue new withdrawal
+            //
+            // NOTE: It's technically possible to check whether queuing is needed, as there might be
+            //       sufficient balance in the open trench to fulfill the entire amount. However,
+            //       keeping branching minimal simplifies code and makes it easier to audit.
+            let queue_id = self.queued_withdrawal_count.read();
+            self.queued_withdrawal_count.write(queue_id + 1);
+            self
+                .withdrawal_queue_total_size
+                .write(self.withdrawal_queue_total_size.read() + unstake_amount);
+            self
+                .queued_withdrawals
+                .write(
+                    queue_id,
+                    QueuedWithdrawal {
+                        recipient: staker, amount_remaining: unstake_amount, amount_withdrawable: 0,
+                    }
+                );
+
+            self.settle_open_trench();
+
+            let withdraw_result = self.withdraw_checked(queue_id);
+            UnstakeResult {
+                queue_id, total_amount: unstake_amount, amount_fulfilled: withdraw_result.fulfilled
+            }
         }
 
-        fn withdraw(ref self: ContractState, withdrawal_id: u128) {}
+        fn withdraw(ref self: ContractState, queue_id: u128) -> WithdrawResult {
+            // This is necessary to account for any passive fund inflows
+            self.settle_open_trench();
+
+            let staker = get_caller_address();
+            assert(!staker.is_zero(), Errors::ZERO_STAKER);
+
+            let queue_item = self.queued_withdrawals.read(queue_id);
+            assert(staker == queue_item.recipient, Errors::NOT_RECIPIENT);
+
+            self.withdraw_checked(queue_id)
+        }
 
         fn set_staker(ref self: ContractState, staker: ContractAddress) {
             self.staker.write(staker);
@@ -216,19 +309,71 @@ pub mod Pool {
     #[generate_trait]
     impl InteranlImpl of InternalTrait {
         fn settle_open_trench(ref self: ContractState) {
-            let strk_token = self.strk_token.read();
-            let trench_size = self.trench_size.read();
+            Self::fulfill_withdrawal_queue(ref self);
+            Self::create_new_trenches(ref self);
+        }
 
-            // TODO: take withdrawable amount into account
-            let open_trench_balance: u128 = strk_token
-                .balance_of(get_contract_address())
-                .try_into()
-                .expect(Errors::POOL_BALANCE_OVERFLOW);
+        fn fulfill_withdrawal_queue(ref self: ContractState) {
+            let queued_count = self.queued_withdrawal_count.read();
+            let original_active_cursor = self.active_queued_withdrawal_cursor.read();
+
+            // Queue is not empty
+            if original_active_cursor < queued_count {
+                let trench_balance = Self::get_open_trench_balance(@self);
+
+                if !trench_balance.is_zero() {
+                    let mut disposable_amount = trench_balance;
+                    let mut current_active_cursor = original_active_cursor;
+
+                    // When looping there's no need to check whether `disposable_amount` is zero, as
+                    // we known it's depleted when we cannot fulfill an entire item.
+                    while current_active_cursor <= queued_count {
+                        let mut active_item = self.queued_withdrawals.read(current_active_cursor);
+
+                        let unfulfilled_amount = active_item.amount_remaining
+                            - active_item.amount_withdrawable;
+
+                        let amount_to_fulfill = min(unfulfilled_amount, disposable_amount);
+                        disposable_amount -= amount_to_fulfill;
+
+                        if amount_to_fulfill == unfulfilled_amount {
+                            // Item fully fulfilled. There's no need to update `amount_withdrawable`
+                            // since we're moving the cursor over.
+                            current_active_cursor += 1;
+                        } else {
+                            // Item not fully fulfilled. This item is now the active item. Need to
+                            // update `amount_withdrawable` to reflect the fulfillment.
+                            active_item.amount_withdrawable += amount_to_fulfill;
+                            self.queued_withdrawals.write(current_active_cursor, active_item);
+
+                            break;
+                        }
+                    };
+
+                    let total_amount_fulfiled = trench_balance - disposable_amount;
+                    self
+                        .withdrawal_queue_withdrawable_size
+                        .write(
+                            self.withdrawal_queue_withdrawable_size.read() + total_amount_fulfiled
+                        );
+
+                    if current_active_cursor != original_active_cursor {
+                        self.active_queued_withdrawal_cursor.write(current_active_cursor);
+                    }
+                }
+            }
+        }
+
+        fn create_new_trenches(ref self: ContractState) {
+            let open_trench_balance = Self::get_open_trench_balance(@self);
+
+            let trench_size = self.trench_size.read();
             let new_trenches_count = open_trench_balance / trench_size;
 
             if !new_trenches_count.is_zero() {
                 // TODO: take inactive proxies into account
 
+                let strk_token = self.strk_token.read();
                 let mut ind_proxy = self.proxy_count.read();
                 let proxy_class = self.proxy_class_hash.read();
 
@@ -261,6 +406,77 @@ pub mod Pool {
 
                 self.proxy_count.write(ind_proxy);
             }
+        }
+
+        fn withdraw_checked(ref self: ContractState, queue_id: u128) -> WithdrawResult {
+            let active_cursor = self.active_queued_withdrawal_cursor.read();
+            let queue_item = self.queued_withdrawals.read(queue_id);
+
+            let result = if active_cursor < queue_id {
+                // Item fully pending. Nothing to do.
+
+                WithdrawResult { fulfilled: 0, remaining: queue_item.amount_remaining }
+            } else if active_cursor > queue_id {
+                // Item fully fulfilled. Send funds and remove item.
+
+                self
+                    .queued_withdrawals
+                    .write(
+                        queue_id,
+                        QueuedWithdrawal {
+                            recipient: contract_address_const::<0>(),
+                            amount_remaining: 0,
+                            amount_withdrawable: 0,
+                        }
+                    );
+
+                WithdrawResult { fulfilled: queue_item.amount_remaining, remaining: 0 }
+            } else {
+                // Item partially fulfilled. Take withdrawable amount.
+
+                let new_remaining = queue_item.amount_remaining - queue_item.amount_withdrawable;
+
+                self
+                    .queued_withdrawals
+                    .write(
+                        queue_id,
+                        QueuedWithdrawal {
+                            recipient: queue_item.recipient.clone(),
+                            amount_remaining: new_remaining,
+                            amount_withdrawable: 0,
+                        }
+                    );
+
+                WithdrawResult {
+                    fulfilled: queue_item.amount_withdrawable, remaining: new_remaining
+                }
+            };
+
+            if !result.fulfilled.is_zero() {
+                self
+                    .withdrawal_queue_total_size
+                    .write(self.withdrawal_queue_total_size.read() - result.fulfilled);
+                self
+                    .withdrawal_queue_withdrawable_size
+                    .write(self.withdrawal_queue_withdrawable_size.read() - result.fulfilled);
+
+                assert(
+                    self.strk_token.read().transfer(queue_item.recipient, result.fulfilled.into()),
+                    Errors::TRANSFER_FAILED
+                );
+            }
+
+            result
+        }
+
+        fn get_open_trench_balance(self: @ContractState) -> u128 {
+            self
+                .strk_token
+                .read()
+                .balance_of(get_contract_address())
+                .try_into()
+                .expect(Errors::POOL_BALANCE_OVERFLOW)
+                - self.withdrawal_queue_withdrawable_size.read()
         }
     }
 }
