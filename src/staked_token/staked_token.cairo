@@ -1,5 +1,12 @@
+/// A standard ERC20 token representing ownership in the stake pool.
+///
+/// The only extension on top of the ERC20 standard is the `Pool` contract's ability to:
+///
+/// - mint and burn tokens;
+/// - upgrade the contract.
 #[starknet::contract]
 pub mod StakedToken {
+    use starknet::ClassHash;
     use starknet::ContractAddress;
     use starknet::get_caller_address;
     use starknet::storage::{StoragePointerReadAccess, StoragePointerWriteAccess};
@@ -7,19 +14,23 @@ pub mod StakedToken {
     use strk_liquid_staking::staked_token::interface::IStakedToken;
     use openzeppelin::token::erc20::{ERC20Component, ERC20HooksEmptyImpl};
     use openzeppelin::token::erc20::interface::IERC20Metadata;
+    use openzeppelin::upgrades::interface::IUpgradeable;
+    use openzeppelin::upgrades::upgradeable::UpgradeableComponent;
 
     component!(path: ERC20Component, storage: erc20, event: ERC20Event);
+    component!(path: UpgradeableComponent, storage: upgradeable, event: UpgradeableEvent);
 
     #[abi(embed_v0)]
     impl ERC20Impl = ERC20Component::ERC20Impl<ContractState>;
     #[abi(embed_v0)]
     impl ERC20CamelOnlyImpl = ERC20Component::ERC20CamelOnlyImpl<ContractState>;
-    impl ERC20InternalImpl = ERC20Component::InternalImpl<ContractState>;
 
     #[storage]
     struct Storage {
         #[substorage(v0)]
-        pub erc20: ERC20Component::Storage,
+        erc20: ERC20Component::Storage,
+        #[substorage(v0)]
+        upgradeable: UpgradeableComponent::Storage,
         pool: ContractAddress,
     }
 
@@ -28,6 +39,8 @@ pub mod StakedToken {
     enum Event {
         #[flat]
         ERC20Event: ERC20Component::Event,
+        #[flat]
+        UpgradeableEvent: UpgradeableComponent::Event,
     }
 
     pub mod Errors {
@@ -35,8 +48,9 @@ pub mod StakedToken {
     }
 
     #[constructor]
-    pub fn constructor(ref self: ContractState, pool: ContractAddress) {
-        self.pool.write(pool);
+    pub fn constructor(ref self: ContractState) {
+        let sender = get_caller_address();
+        self.pool.write(sender);
     }
 
     #[abi(embed_v0)]
@@ -66,6 +80,15 @@ pub mod StakedToken {
 
         fn decimals(self: @ContractState) -> u8 {
             18
+        }
+    }
+
+    #[abi(embed_v0)]
+    impl UpgradeableImpl of IUpgradeable<ContractState> {
+        fn upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            let sender = get_caller_address();
+            assert(sender == self.pool.read(), Errors::CALLER_NOT_POOL);
+            UpgradeableComponent::InternalTrait::upgrade(ref self.upgradeable, new_class_hash);
         }
     }
 }

@@ -13,18 +13,25 @@ pub struct MockAccount {
     pub address: ContractAddress,
     pub strk: MockAccountErc20Caller,
     pub staking: MockAccountStakingCaller,
+    pub pool: MockAccountPoolCaller,
 }
 
 #[derive(Drop)]
 pub struct MockAccountErc20Caller {
-    account_address: ContractAddress,
-    token_address: ContractAddress,
+    pub account_address: ContractAddress,
+    pub token_address: ContractAddress,
 }
 
 #[derive(Drop)]
 pub struct MockAccountStakingCaller {
-    account_address: ContractAddress,
-    staking_address: ContractAddress,
+    pub account_address: ContractAddress,
+    pub staking_address: ContractAddress,
+}
+
+#[derive(Drop)]
+pub struct MockAccountPoolCaller {
+    pub account_address: ContractAddress,
+    pub pool_address: ContractAddress,
 }
 
 pub trait IMockAccountErc20Caller {
@@ -44,8 +51,21 @@ pub trait IMockAccountStakingCaller {
     );
 }
 
+pub trait IMockAccountPoolCaller {
+    fn stake(self: @MockAccountPoolCaller, amount: u128);
+
+    fn unstake(self: @MockAccountPoolCaller, amount: u128) -> u128;
+
+    fn withdraw(self: @MockAccountPoolCaller, withdrawal_id: u128);
+
+    fn set_staker(self: @MockAccountPoolCaller, staker: ContractAddress);
+}
+
 pub fn create_mock_account(
-    strk_address: ContractAddress, staking_address: ContractAddress, salt: felt252
+    strk_address: ContractAddress,
+    staking_address: ContractAddress,
+    pool_address: ContractAddress,
+    salt: felt252
 ) -> MockAccount {
     let mock_account_contract_class = snforge_std::declare("MockAccountContract")
         .unwrap()
@@ -60,9 +80,8 @@ pub fn create_mock_account(
         strk: MockAccountErc20Caller {
             account_address: deployed_address, token_address: strk_address
         },
-        staking: MockAccountStakingCaller {
-            account_address: deployed_address, staking_address: staking_address
-        }
+        staking: MockAccountStakingCaller { account_address: deployed_address, staking_address },
+        pool: MockAccountPoolCaller { account_address: deployed_address, pool_address }
     }
 }
 
@@ -96,5 +115,27 @@ impl IMockAccountStakingCallerImpl of IMockAccountStakingCaller {
                 pool_enabled,
                 commission
             )
+    }
+}
+
+impl IMockAccountPoolCallerImpl of IMockAccountPoolCaller {
+    fn stake(self: @MockAccountPoolCaller, amount: u128) {
+        IMockAccountContractDispatcher { contract_address: *self.account_address }
+            .pool_stake(*self.pool_address, amount)
+    }
+
+    fn unstake(self: @MockAccountPoolCaller, amount: u128) -> u128 {
+        IMockAccountContractDispatcher { contract_address: *self.account_address }
+            .pool_unstake(*self.pool_address, amount)
+    }
+
+    fn withdraw(self: @MockAccountPoolCaller, withdrawal_id: u128) {
+        IMockAccountContractDispatcher { contract_address: *self.account_address }
+            .pool_withdraw(*self.pool_address, withdrawal_id)
+    }
+
+    fn set_staker(self: @MockAccountPoolCaller, staker: ContractAddress) {
+        IMockAccountContractDispatcher { contract_address: *self.account_address }
+            .pool_set_staker(*self.pool_address, staker)
     }
 }
