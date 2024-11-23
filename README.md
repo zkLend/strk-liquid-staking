@@ -158,3 +158,5 @@ Based on the above rules, given a trench size of _T_, it can be concluded that t
 It's important to decide on a trench size that's well balanced. Since the open trench does not earn rewards, a trench size that's too large causes the overall yield of the protocol to be unnecessarily low; on the other hand, a trench size that's too small causes additional operational overhead as more contract calls are involved in routine actions such as reward collections.
 
 In the future, the ability to change the trench size should be developed to allow the protocol to scale efficiently.
+
+One possible design to transition from one trench size to another would be to run two sizes in parallel, where new trenches are only created for the new size, and undelegation only happens for the old size until it's fully depleted.
