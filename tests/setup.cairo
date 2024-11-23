@@ -78,6 +78,8 @@ pub fn setup_sepolia() -> Setup {
             strk_contract.contract_address.into(),
             // staking_contract
             staking_contract.contract_address.into(),
+            // unstake_delay
+            5 * 60,
             // proxy_class_hash
             (*proxy_contract_class).into(),
             // staked_token_class_hash

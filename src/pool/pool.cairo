@@ -22,7 +22,9 @@ pub mod Pool {
     use core::cmp::min;
     use core::num::traits::Zero;
     use starknet::{ClassHash, ContractAddress};
-    use starknet::{contract_address_const, get_caller_address, get_contract_address};
+    use starknet::{
+        contract_address_const, get_block_timestamp, get_caller_address, get_contract_address
+    };
     use starknet::storage::{
         Map, StorageMapReadAccess, StorageMapWriteAccess, StoragePointerReadAccess,
         StoragePointerWriteAccess
@@ -36,7 +38,9 @@ pub mod Pool {
     use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
     use openzeppelin::upgrades::interface::IUpgradeable;
     use openzeppelin::upgrades::upgradeable::UpgradeableComponent;
-    use strk_liquid_staking::pool::interface::{IPool, Proxy, UnstakeResult, WithdrawResult};
+    use strk_liquid_staking::pool::interface::{
+        ActiveProxy, IPool, InactiveProxy, UnstakeResult, WithdrawResult
+    };
     use strk_liquid_staking::proxy::interface::{IProxyDispatcher, IProxyDispatcherTrait};
     use strk_liquid_staking::staked_token::interface::{
         IStakedTokenDispatcher, IStakedTokenDispatcherTrait
@@ -61,12 +65,22 @@ pub mod Pool {
         upgradeable: UpgradeableComponent::Storage,
         strk_token: IERC20Dispatcher,
         staking_contract: IStakingDispatcher,
+        unstake_delay: u64,
         staked_token: IStakedTokenDispatcher,
         trench_size: u128,
         staker: ContractAddress,
         proxy_class_hash: ClassHash,
-        proxy_count: u128,
-        proxies: Map<u128, Proxy>,
+        total_proxy_count: u128,
+        active_proxy_count: u128,
+        active_proxies: Map<u128, ActiveProxy>,
+        /// The next available index in `inactive_proxies`.
+        next_inactive_proxy_index: u128,
+        /// Points to the index of the next inactive proxy to be reused in `inactive_proxies`.
+        reused_proxy_cursor: u128,
+        /// Points to the index of the next inactive proxy to finish unstaking in
+        /// `inactive_proxies`.
+        exited_proxy_cursor: u128,
+        inactive_proxies: Map<u128, InactiveProxy>,
         queued_withdrawal_count: u128,
         active_queued_withdrawal_cursor: u128,
         /// The total size of the withdrawal queue, including the interally-fulfilled but not yet
@@ -146,6 +160,7 @@ pub mod Pool {
         owner: ContractAddress,
         strk_token: ContractAddress,
         staking_contract: ContractAddress,
+        unstake_delay: u64,
         proxy_class_hash: ClassHash,
         staked_token_class_hash: ClassHash,
         trench_size: u128,
@@ -159,6 +174,7 @@ pub mod Pool {
 
         self.strk_token.write(IERC20Dispatcher { contract_address: strk_token });
         self.staking_contract.write(IStakingDispatcher { contract_address: staking_contract });
+        self.unstake_delay.write(unstake_delay);
         self.staked_token.write(IStakedTokenDispatcher { contract_address: staked_token });
         self.trench_size.write(trench_size);
         self.proxy_class_hash.write(proxy_class_hash);
@@ -196,23 +212,16 @@ pub mod Pool {
             self.staked_token.read().contract_address
         }
 
-        fn get_proxy(self: @ContractState, index: u128) -> Option<Proxy> {
-            if index < self.proxy_count.read() {
-                Option::Some(self.proxies.read(index))
-            } else {
-                Option::None
-            }
-        }
-
         fn get_total_stake(self: @ContractState) -> u128 {
-            // TODO: account for amount pending withdrawal
             self
                 .strk_token
                 .read()
                 .balance_of(get_contract_address())
                 .try_into()
                 .expect(Errors::POOL_BALANCE_OVERFLOW)
-                + (self.trench_size.read() * self.proxy_count.read())
+                + (self.trench_size.read()
+                    * (self.active_proxy_count.read() + self.get_exiting_proxy_count()))
+                - self.withdrawal_queue_total_size.read()
         }
 
         fn get_open_trench_balance(self: @ContractState) -> u128 {
@@ -309,8 +318,34 @@ pub mod Pool {
     #[generate_trait]
     impl InteranlImpl of InternalTrait {
         fn settle_open_trench(ref self: ContractState) {
+            Self::settle_proxy_exits(ref self);
             Self::fulfill_withdrawal_queue(ref self);
+            Self::deactivate_proxies(ref self);
             Self::create_new_trenches(ref self);
+        }
+
+        fn settle_proxy_exits(ref self: ContractState) {
+            let original_active_cursor = self.exited_proxy_cursor.read();
+            let next_inactive_proxy_index = self.next_inactive_proxy_index.read();
+
+            let strk_token = self.strk_token.read();
+            let unstake_delay = self.unstake_delay.read();
+            let current_timestamp = get_block_timestamp();
+
+            let mut current_active_cursor = original_active_cursor;
+            while current_active_cursor < next_inactive_proxy_index {
+                let current_proxy = self.inactive_proxies.read(current_active_cursor);
+                if current_timestamp < current_proxy.initiated_time + unstake_delay {
+                    break;
+                }
+
+                current_proxy.contract.exit_action(current_proxy.delegation_pool, strk_token);
+                current_active_cursor += 1;
+            };
+
+            if original_active_cursor != current_active_cursor {
+                self.exited_proxy_cursor.write(current_active_cursor);
+            }
         }
 
         fn fulfill_withdrawal_queue(ref self: ContractState) {
@@ -364,6 +399,60 @@ pub mod Pool {
             }
         }
 
+        fn deactivate_proxies(ref self: ContractState) {
+            let withdrawal_fulfillment_shortfall = self.withdrawal_queue_total_size.read()
+                - self.withdrawal_queue_withdrawable_size.read();
+
+            if !withdrawal_fulfillment_shortfall.is_zero() {
+                let trench_size = self.trench_size.read();
+                let trenches_needed = (withdrawal_fulfillment_shortfall + trench_size - 1)
+                    / trench_size;
+
+                let exiting_proxy_count = self.get_exiting_proxy_count();
+                if exiting_proxy_count < trenches_needed {
+                    let timestamp = get_block_timestamp();
+
+                    let active_proxy_count_before = self.active_proxy_count.read();
+                    let first_available_inactive_index = self.next_inactive_proxy_index.read();
+                    let proxies_to_deactivate = trenches_needed - exiting_proxy_count;
+
+                    for ind in 0
+                        ..proxies_to_deactivate {
+                            // TODO: collect rewards before deactivating
+
+                            // It's okay to leave storage untouched as `active_proxy_count` acts as
+                            // a cursor to the final item. It's also optimal to not clear storage as
+                            // Starknet charges for doing so.
+                            let current_proxy = self
+                                .active_proxies
+                                .read(active_proxy_count_before - ind - 1);
+
+                            current_proxy
+                                .contract
+                                .exit_intent(current_proxy.delegation_pool, trench_size);
+
+                            self
+                                .inactive_proxies
+                                .write(
+                                    first_available_inactive_index + ind,
+                                    InactiveProxy {
+                                        contract: current_proxy.contract,
+                                        delegation_pool: current_proxy.delegation_pool,
+                                        initiated_time: timestamp,
+                                    }
+                                );
+                        };
+
+                    self
+                        .active_proxy_count
+                        .write(active_proxy_count_before - proxies_to_deactivate);
+                    self
+                        .next_inactive_proxy_index
+                        .write(first_available_inactive_index + proxies_to_deactivate);
+                }
+            }
+        }
+
         fn create_new_trenches(ref self: ContractState) {
             let open_trench_balance = Self::get_open_trench_balance(@self);
 
@@ -374,7 +463,8 @@ pub mod Pool {
                 // TODO: take inactive proxies into account
 
                 let strk_token = self.strk_token.read();
-                let mut ind_proxy = self.proxy_count.read();
+                let total_proxy_count_before = self.total_proxy_count.read();
+                let active_proxy_count_before = self.active_proxy_count.read();
                 let proxy_class = self.proxy_class_hash.read();
 
                 let delegation_pool = IDelegationPoolDispatcher {
@@ -387,10 +477,10 @@ pub mod Pool {
                         .pool_contract
                 };
 
-                for _ in 0
+                for ind in 0
                     ..new_trenches_count {
                         let (new_proxy, _) = deploy_syscall(
-                            proxy_class, ind_proxy.into(), [].span(), false
+                            proxy_class, (total_proxy_count_before + ind).into(), [].span(), false
                         )
                             .expect(Errors::DEPLOY_PROXY_FAILED);
                         let new_proxy = IProxyDispatcher { contract_address: new_proxy };
@@ -399,12 +489,15 @@ pub mod Pool {
                         new_proxy.delegate(delegation_pool, strk_token, trench_size);
 
                         self
-                            .proxies
-                            .write(ind_proxy, Proxy { contract: new_proxy, delegation_pool });
-                        ind_proxy += 1;
+                            .active_proxies
+                            .write(
+                                active_proxy_count_before + ind,
+                                ActiveProxy { contract: new_proxy, delegation_pool }
+                            );
                     };
 
-                self.proxy_count.write(ind_proxy);
+                self.total_proxy_count.write(total_proxy_count_before + new_trenches_count);
+                self.active_proxy_count.write(active_proxy_count_before + new_trenches_count);
             }
         }
 
@@ -477,6 +570,10 @@ pub mod Pool {
                 .try_into()
                 .expect(Errors::POOL_BALANCE_OVERFLOW)
                 - self.withdrawal_queue_withdrawable_size.read()
+        }
+
+        fn get_exiting_proxy_count(self: @ContractState) -> u128 {
+            self.next_inactive_proxy_index.read() - self.exited_proxy_cursor.read()
         }
     }
 }

@@ -11,7 +11,7 @@
 pub mod Proxy {
     use starknet::ClassHash;
     use starknet::ContractAddress;
-    use starknet::get_caller_address;
+    use starknet::{get_caller_address, get_contract_address};
     use starknet::storage::{StoragePointerReadAccess, StoragePointerWriteAccess};
 
     use contracts::pool::interface::{
@@ -70,6 +70,24 @@ pub mod Proxy {
             EntrypointTrait::delegate(ref self, delegation_pool, token, amount);
             ReentrancyGuardComponent::InternalTrait::end(ref self.reentrancy_guard);
         }
+
+        fn exit_intent(
+            ref self: ContractState, delegation_pool: IDelegationPoolDispatcher, amount: u128
+        ) {
+            ReentrancyGuardComponent::InternalTrait::start(ref self.reentrancy_guard);
+            EntrypointTrait::exit_intent(ref self, delegation_pool, amount);
+            ReentrancyGuardComponent::InternalTrait::end(ref self.reentrancy_guard);
+        }
+
+        fn exit_action(
+            ref self: ContractState,
+            delegation_pool: IDelegationPoolDispatcher,
+            token: IERC20Dispatcher
+        ) {
+            ReentrancyGuardComponent::InternalTrait::start(ref self.reentrancy_guard);
+            EntrypointTrait::exit_action(ref self, delegation_pool, token);
+            ReentrancyGuardComponent::InternalTrait::end(ref self.reentrancy_guard);
+        }
     }
 
     #[abi(embed_v0)]
@@ -99,6 +117,27 @@ pub mod Proxy {
 
             // Rewards go directly into `Pool`
             delegation_pool.enter_delegation_pool(sender, amount);
+        }
+
+        fn exit_intent(
+            ref self: ContractState, delegation_pool: IDelegationPoolDispatcher, amount: u128
+        ) {
+            let sender = get_caller_address();
+            assert(sender == self.pool.read(), Errors::CALLER_NOT_POOL);
+
+            delegation_pool.exit_delegation_pool_intent(amount);
+        }
+
+        fn exit_action(
+            ref self: ContractState,
+            delegation_pool: IDelegationPoolDispatcher,
+            token: IERC20Dispatcher
+        ) {
+            let sender = get_caller_address();
+            assert(sender == self.pool.read(), Errors::CALLER_NOT_POOL);
+
+            let amount = delegation_pool.exit_delegation_pool_action(get_contract_address());
+            token.transfer(sender, amount.into());
         }
     }
 }

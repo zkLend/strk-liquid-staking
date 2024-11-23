@@ -1,6 +1,7 @@
-use core::num::traits::Zero;
+use starknet::get_block_timestamp;
 
 use openzeppelin::token::erc20::interface::IERC20DispatcherTrait;
+use snforge_std::start_cheat_block_timestamp_global;
 use strk_liquid_staking::pool::interface::IPoolDispatcherTrait;
 
 use super::mock::{IMockAccountErc20Caller, IMockAccountPoolCaller};
@@ -17,16 +18,7 @@ fn test_simple_staking() {
 
     assert_eq!(contracts.pool.get_total_stake(), amount);
     assert_eq!(contracts.staked_token.balance_of(accounts.alice.address), amount.into());
-
-    let proxy_0 = contracts.pool.get_proxy(0).unwrap();
-    let proxy_1 = contracts.pool.get_proxy(1).unwrap();
-
-    assert!(!proxy_0.contract.contract_address.is_zero());
-    assert!(!proxy_0.delegation_pool.contract_address.is_zero());
-    assert!(!proxy_1.contract.contract_address.is_zero());
-    assert!(!proxy_1.delegation_pool.contract_address.is_zero());
-
-    assert!(contracts.pool.get_proxy(2).is_none());
+    assert_eq!(contracts.pool.get_open_trench_balance(), 25_000000000000000000);
 }
 
 #[test]
@@ -45,7 +37,7 @@ fn test_fully_fulfilled_unstake() {
     assert_eq!(contracts.pool.get_total_stake(), 225_000000000000000000);
 
     // Alice withdraws 10 STRK which can be immediately fully fulfilled
-    let result = accounts.alice.pool.unstake(10_000000000000000000_u128);
+    let result = accounts.alice.pool.unstake(10_000000000000000000);
     assert_eq!(result.total_amount, 10_000000000000000000);
     assert_eq!(result.amount_fulfilled, 10_000000000000000000);
 
@@ -72,7 +64,7 @@ fn test_partially_fulfilled_unstake() {
     assert_eq!(contracts.pool.get_total_stake(), 225_000000000000000000);
 
     // Alice withdraws 30 STRK which can be partially fulfilled
-    let result = accounts.alice.pool.unstake(30_000000000000000000_u128);
+    let result = accounts.alice.pool.unstake(30_000000000000000000);
     assert_eq!(result.total_amount, 30_000000000000000000);
     assert_eq!(result.amount_fulfilled, 25_000000000000000000);
 
@@ -80,7 +72,20 @@ fn test_partially_fulfilled_unstake() {
     // Open trench balance: 0
     assert_eq!(contracts.strk.balance_of(accounts.alice.address), 800_000000000000000000);
     assert_eq!(contracts.pool.get_open_trench_balance(), 0);
-    assert_eq!(contracts.pool.get_total_stake(), 200_000000000000000000);
+    assert_eq!(contracts.pool.get_total_stake(), 195_000000000000000000);
+
+    // Immediately withdrawing yields nothing
+    assert_eq!(accounts.alice.pool.withdraw(0).fulfilled, 0);
+
+    // Can withdraw after 5 minutes as the inactive proxy exits
+    start_cheat_block_timestamp_global(get_block_timestamp() + 300);
+    assert_eq!(accounts.alice.pool.withdraw(0).fulfilled, 5_000000000000000000);
+
+    // Alice balance: 805
+    // Open trench balance: 95
+    assert_eq!(contracts.strk.balance_of(accounts.alice.address), 805_000000000000000000);
+    assert_eq!(contracts.pool.get_open_trench_balance(), 95_000000000000000000);
+    assert_eq!(contracts.pool.get_total_stake(), 195_000000000000000000);
 }
 
 #[test]
@@ -88,24 +93,37 @@ fn test_partially_fulfilled_unstake() {
 fn test_unfulfilled_unstake() {
     let Setup { contracts, accounts } = setup_sepolia();
 
-    let stake_amount = 200_000000000000000000_u128;
+    let stake_amount = 800_000000000000000000_u128;
     accounts.alice.strk.approve(contracts.pool.contract_address, stake_amount.into());
     accounts.alice.pool.stake(stake_amount);
 
-    // Alice balance: 800
+    // Alice balance: 200
     // Open trench balance: 0
-    assert_eq!(contracts.strk.balance_of(accounts.alice.address), 800_000000000000000000);
+    assert_eq!(contracts.strk.balance_of(accounts.alice.address), 200_000000000000000000);
     assert_eq!(contracts.pool.get_open_trench_balance(), 0);
-    assert_eq!(contracts.pool.get_total_stake(), 200_000000000000000000);
+    assert_eq!(contracts.pool.get_total_stake(), 800_000000000000000000);
 
-    // Alice withdraws 10 STRK where none can be fulfilled
-    let result = accounts.alice.pool.unstake(10_000000000000000000_u128);
-    assert_eq!(result.total_amount, 10_000000000000000000);
+    // Alice withdraws 410 STRK where none can be fulfilled
+    let result = accounts.alice.pool.unstake(410_000000000000000000);
+    assert_eq!(result.total_amount, 410_000000000000000000);
     assert_eq!(result.amount_fulfilled, 0);
 
-    // Alice balance: 800
+    // Alice balance: 200
     // Open trench balance: 0
-    assert_eq!(contracts.strk.balance_of(accounts.alice.address), 800_000000000000000000);
+    assert_eq!(contracts.strk.balance_of(accounts.alice.address), 200_000000000000000000);
     assert_eq!(contracts.pool.get_open_trench_balance(), 0);
-    assert_eq!(contracts.pool.get_total_stake(), 200_000000000000000000);
+    assert_eq!(contracts.pool.get_total_stake(), 390_000000000000000000);
+
+    // Immediately withdrawing yields nothing
+    assert_eq!(accounts.alice.pool.withdraw(0).fulfilled, 0);
+
+    // Can withdraw after 5 minutes as the inactive proxy exits
+    start_cheat_block_timestamp_global(get_block_timestamp() + 300);
+    assert_eq!(accounts.alice.pool.withdraw(0).fulfilled, 410_000000000000000000);
+
+    // Alice balance: 610
+    // Open trench balance: 90
+    assert_eq!(contracts.strk.balance_of(accounts.alice.address), 610_000000000000000000);
+    assert_eq!(contracts.pool.get_open_trench_balance(), 90_000000000000000000);
+    assert_eq!(contracts.pool.get_total_stake(), 390_000000000000000000);
 }

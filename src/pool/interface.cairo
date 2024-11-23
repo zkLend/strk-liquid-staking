@@ -4,9 +4,16 @@ use contracts::pool::interface::{IPoolDispatcher as IDelegationPoolDispatcher};
 use strk_liquid_staking::proxy::interface::IProxyDispatcher;
 
 #[derive(Drop, Serde, starknet::Store)]
-pub struct Proxy {
+pub struct ActiveProxy {
     pub contract: IProxyDispatcher,
     pub delegation_pool: IDelegationPoolDispatcher,
+}
+
+#[derive(Drop, Serde, starknet::Store)]
+pub struct InactiveProxy {
+    pub contract: IProxyDispatcher,
+    pub delegation_pool: IDelegationPoolDispatcher,
+    pub initiated_time: u64,
 }
 
 #[derive(Drop, Serde)]
@@ -33,8 +40,6 @@ pub trait IPool<TContractState> {
     fn set_staker(ref self: TContractState, staker: ContractAddress);
 
     fn get_staked_token(self: @TContractState) -> ContractAddress;
-
-    fn get_proxy(self: @TContractState, index: u128) -> Option<Proxy>;
 
     fn get_total_stake(self: @TContractState) -> u128;
 
