@@ -22,4 +22,6 @@ pub trait IPool<TContractState> {
     fn get_staked_token(self: @TContractState) -> ContractAddress;
 
     fn get_proxy(self: @TContractState, index: u128) -> Option<Proxy>;
+
+    fn get_total_stake(self: @TContractState) -> u128;
 }

@@ -15,6 +15,7 @@ fn test_simple_staking() {
     accounts.alice.strk.approve(contracts.pool.contract_address, amount.into());
     accounts.alice.pool.stake(amount);
 
+    assert_eq!(contracts.pool.get_total_stake(), amount);
     assert_eq!(contracts.staked_token.balance_of(accounts.alice.address), amount.into());
 
     let proxy_0 = contracts.pool.get_proxy(0).unwrap();

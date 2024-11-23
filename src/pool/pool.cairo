@@ -160,6 +160,16 @@ pub mod Pool {
                 Option::None
             }
         }
+
+        fn get_total_stake(self: @ContractState) -> u128 {
+            self
+                .strk_token
+                .read()
+                .balance_of(get_contract_address())
+                .try_into()
+                .expect(Errors::POOL_BALANCE_OVERFLOW)
+                + (self.trench_size.read() * self.proxy_count.read())
+        }
     }
 
     #[abi(embed_v0)]
