@@ -39,7 +39,7 @@ pub mod Pool {
     use openzeppelin::upgrades::interface::IUpgradeable;
     use openzeppelin::upgrades::upgradeable::UpgradeableComponent;
     use strk_liquid_staking::pool::interface::{
-        ActiveProxy, IPool, InactiveProxy, UnstakeResult, WithdrawResult
+        ActiveProxy, IPool, InactiveProxy, ProxyStats, UnstakeResult, WithdrawResult
     };
     use strk_liquid_staking::proxy::interface::{IProxyDispatcher, IProxyDispatcherTrait};
     use strk_liquid_staking::staked_token::interface::{
@@ -222,6 +222,19 @@ pub mod Pool {
                 + (self.trench_size.read()
                     * (self.active_proxy_count.read() + self.get_exiting_proxy_count()))
                 - self.withdrawal_queue_total_size.read()
+        }
+
+        fn get_proxy_stats(self: @ContractState) -> ProxyStats {
+            let next_inactive_proxy_index = self.next_inactive_proxy_index.read();
+            let reused_proxy_cursor = self.reused_proxy_cursor.read();
+            let exited_proxy_cursor = self.exited_proxy_cursor.read();
+
+            ProxyStats {
+                total_proxy_count: self.total_proxy_count.read(),
+                active_proxy_count: self.active_proxy_count.read(),
+                exiting_proxy_count: next_inactive_proxy_index - exited_proxy_cursor,
+                standby_proxy_count: exited_proxy_cursor - reused_proxy_cursor,
+            }
         }
 
         fn get_open_trench_balance(self: @ContractState) -> u128 {
@@ -460,7 +473,10 @@ pub mod Pool {
             let new_trenches_count = open_trench_balance / trench_size;
 
             if !new_trenches_count.is_zero() {
-                // TODO: take inactive proxies into account
+                let reused_proxy_cursor = self.reused_proxy_cursor.read();
+
+                let reuse_proxy_count = self.exited_proxy_cursor.read() - reused_proxy_cursor;
+                let new_proxy_count = new_trenches_count - reuse_proxy_count;
 
                 let strk_token = self.strk_token.read();
                 let total_proxy_count_before = self.total_proxy_count.read();
@@ -479,11 +495,18 @@ pub mod Pool {
 
                 for ind in 0
                     ..new_trenches_count {
-                        let (new_proxy, _) = deploy_syscall(
-                            proxy_class, (total_proxy_count_before + ind).into(), [].span(), false
-                        )
-                            .expect(Errors::DEPLOY_PROXY_FAILED);
-                        let new_proxy = IProxyDispatcher { contract_address: new_proxy };
+                        let new_proxy = if ind < reuse_proxy_count {
+                            self.inactive_proxies.read(reused_proxy_cursor + ind).contract
+                        } else {
+                            let (new_proxy, _) = deploy_syscall(
+                                proxy_class,
+                                (total_proxy_count_before + ind - reuse_proxy_count).into(),
+                                [].span(),
+                                false
+                            )
+                                .expect(Errors::DEPLOY_PROXY_FAILED);
+                            IProxyDispatcher { contract_address: new_proxy }
+                        };
 
                         strk_token.transfer(new_proxy.contract_address, trench_size.into());
                         new_proxy.delegate(delegation_pool, strk_token, trench_size);
@@ -496,7 +519,13 @@ pub mod Pool {
                             );
                     };
 
-                self.total_proxy_count.write(total_proxy_count_before + new_trenches_count);
+                if !reuse_proxy_count.is_zero() {
+                    self.reused_proxy_cursor.write(reused_proxy_cursor + reuse_proxy_count);
+                }
+                if !new_proxy_count.is_zero() {
+                    self.total_proxy_count.write(total_proxy_count_before + new_proxy_count);
+                }
+
                 self.active_proxy_count.write(active_proxy_count_before + new_trenches_count);
             }
         }

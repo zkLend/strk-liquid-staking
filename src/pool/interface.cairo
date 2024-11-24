@@ -16,6 +16,14 @@ pub struct InactiveProxy {
     pub initiated_time: u64,
 }
 
+#[derive(Debug, Drop, PartialEq, Serde)]
+pub struct ProxyStats {
+    pub total_proxy_count: u128,
+    pub active_proxy_count: u128,
+    pub exiting_proxy_count: u128,
+    pub standby_proxy_count: u128,
+}
+
 #[derive(Drop, Serde)]
 pub struct UnstakeResult {
     pub queue_id: u128,
@@ -42,6 +50,8 @@ pub trait IPool<TContractState> {
     fn get_staked_token(self: @TContractState) -> ContractAddress;
 
     fn get_total_stake(self: @TContractState) -> u128;
+
+    fn get_proxy_stats(self: @TContractState) -> ProxyStats;
 
     fn get_open_trench_balance(self: @TContractState) -> u128;
 }
