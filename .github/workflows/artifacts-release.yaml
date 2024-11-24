@@ -1,0 +1,47 @@
+on:
+  create:
+
+name: "Contract Artifacts (release)"
+jobs:
+  build:
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+
+    name: "Push contract artifacts"
+    runs-on: "ubuntu-latest"
+    steps:
+      - name: "Checkout source code"
+        uses: "actions/checkout@v4"
+
+      - name: "Install scarb"
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://docs.swmansion.com/scarb/install.sh | sh -s -- -v 2.8.5
+
+      - name: "Print scarb version"
+        run: |
+          scarb --version
+
+      - name: "Build contracts"
+        run: |
+          scarb build
+
+      - name: "Set up deploy key for artifacts repo"
+        uses: "webfactory/ssh-agent@v0.7.0"
+        with:
+          ssh-private-key: ${{ secrets.ARTIFACTS_RELEASE_KEY }}
+
+      - name: Push artifacts
+        run: |
+          COMMIT_HASH="$(git log -1 --format="%H")"
+          git clone --depth=1 "git@github.com:zkLend/zklend-contract-artifacts" ./artifacts
+          mkdir -p ./artifacts/strk-staking/$COMMIT_HASH
+          cat ./target/dev/strk_liquid_staking_Pool.contract_class.json | jq "del(.sierra_program_debug_info.type_names[]) | del(.sierra_program_debug_info.libfunc_names[]) | del(.sierra_program_debug_info.user_func_names[])" > ./artifacts/strk-staking/$COMMIT_HASH/Pool.json
+          cat ./target/dev/strk_liquid_staking_Proxy.contract_class.json | jq "del(.sierra_program_debug_info.type_names[]) | del(.sierra_program_debug_info.libfunc_names[]) | del(.sierra_program_debug_info.user_func_names[])" > ./artifacts/strk-staking/$COMMIT_HASH/Proxy.json
+          cat ./target/dev/strk_liquid_staking_StakedToken.contract_class.json | jq "del(.sierra_program_debug_info.type_names[]) | del(.sierra_program_debug_info.libfunc_names[]) | del(.sierra_program_debug_info.user_func_names[])" > ./artifacts/strk-staking/$COMMIT_HASH/StakedToken.json
+          rm -rf ./artifacts/strk-staking/latest
+          (cd ./artifacts/strk-staking/ && rm -rf ./latest && ln -s ./$COMMIT_HASH ./latest)
+          cd ./artifacts
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add .
+          git commit -m "artifacts: add contract artifacts from CI (${COMMIT_HASH::7})"
+          git push
