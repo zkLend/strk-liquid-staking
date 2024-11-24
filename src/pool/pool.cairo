@@ -32,14 +32,18 @@ pub mod Pool {
     use starknet::syscalls::deploy_syscall;
 
     use contracts::staking::interface::{IStakingDispatcher, IStakingDispatcherTrait};
-    use contracts::pool::interface::{IPoolDispatcher as IDelegationPoolDispatcher};
+    use contracts::pool::interface::{
+        IPoolDispatcher as IDelegationPoolDispatcher,
+        IPoolDispatcherTrait as IDelegationPoolDispatcherTrait
+    };
     use openzeppelin::access::ownable::OwnableComponent;
     use openzeppelin::security::reentrancyguard::ReentrancyGuardComponent;
     use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
     use openzeppelin::upgrades::interface::IUpgradeable;
     use openzeppelin::upgrades::upgradeable::UpgradeableComponent;
     use strk_liquid_staking::pool::interface::{
-        ActiveProxy, IPool, InactiveProxy, ProxyStats, UnstakeResult, WithdrawResult
+        ActiveProxy, CollectRewardsResult, IPool, InactiveProxy, ProxyStats, UnstakeResult,
+        WithdrawResult
     };
     use strk_liquid_staking::proxy::interface::{IProxyDispatcher, IProxyDispatcherTrait};
     use strk_liquid_staking::staked_token::interface::{
@@ -203,6 +207,15 @@ pub mod Pool {
             ret
         }
 
+        fn collect_rewards(
+            ref self: ContractState, start_index: u128, end_index: u128
+        ) -> CollectRewardsResult {
+            ReentrancyGuardComponent::InternalTrait::start(ref self.reentrancy_guard);
+            let ret = EntrypointTrait::collect_rewards(ref self, start_index, end_index);
+            ReentrancyGuardComponent::InternalTrait::end(ref self.reentrancy_guard);
+            ret
+        }
+
         fn set_staker(ref self: ContractState, staker: ContractAddress) {
             ReentrancyGuardComponent::InternalTrait::start(ref self.reentrancy_guard);
             EntrypointTrait::set_staker(ref self, staker);
@@ -343,6 +356,25 @@ pub mod Pool {
             assert(staker == queue_item.recipient, Errors::NOT_RECIPIENT);
 
             self.withdraw_checked(queue_id)
+        }
+
+        fn collect_rewards(
+            ref self: ContractState, start_index: u128, end_index: u128
+        ) -> CollectRewardsResult {
+            let mut total_amount = 0;
+
+            let end_index = min(end_index, self.active_proxy_count.read());
+            for proxy_index in start_index
+                ..end_index {
+                    let current_proxy = self.active_proxies.read(proxy_index);
+                    total_amount += current_proxy
+                        .delegation_pool
+                        .claim_rewards(current_proxy.contract.contract_address);
+                };
+
+            self.settle_open_trench();
+
+            CollectRewardsResult { total_amount }
         }
 
         fn set_staker(ref self: ContractState, staker: ContractAddress) {

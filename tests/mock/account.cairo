@@ -1,7 +1,7 @@
 use starknet::ContractAddress;
 
 use contracts::types::{Amount, Commission};
-use strk_liquid_staking::pool::interface::{UnstakeResult, WithdrawResult};
+use strk_liquid_staking::pool::interface::{CollectRewardsResult, UnstakeResult, WithdrawResult};
 
 #[starknet::interface]
 pub trait IMockAccountContract<TContractState> {
@@ -36,6 +36,10 @@ pub trait IMockAccountContract<TContractState> {
         ref self: TContractState, contract: ContractAddress, queue_id: u128
     ) -> WithdrawResult;
 
+    fn pool_collect_rewards(
+        ref self: TContractState, contract: ContractAddress, start_index: u128, end_index: u128
+    ) -> CollectRewardsResult;
+
     fn pool_set_staker(
         ref self: TContractState, contract: ContractAddress, staker: ContractAddress
     );
@@ -49,7 +53,7 @@ pub mod MockAccountContract {
     use contracts::staking::interface::{IStakingDispatcher, IStakingDispatcherTrait};
     use strk_liquid_staking::interfaces::{IERC20Dispatcher, IERC20DispatcherTrait};
     use strk_liquid_staking::pool::interface::{
-        IPoolDispatcher, IPoolDispatcherTrait, UnstakeResult, WithdrawResult
+        CollectRewardsResult, IPoolDispatcher, IPoolDispatcherTrait, UnstakeResult, WithdrawResult
     };
 
     use super::IMockAccountContract;
@@ -104,6 +108,12 @@ pub mod MockAccountContract {
             ref self: ContractState, contract: ContractAddress, queue_id: u128
         ) -> WithdrawResult {
             IPoolDispatcher { contract_address: contract }.withdraw(queue_id)
+        }
+
+        fn pool_collect_rewards(
+            ref self: ContractState, contract: ContractAddress, start_index: u128, end_index: u128
+        ) -> CollectRewardsResult {
+            IPoolDispatcher { contract_address: contract }.collect_rewards(start_index, end_index)
         }
 
         fn pool_set_staker(

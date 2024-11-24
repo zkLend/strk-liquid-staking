@@ -37,6 +37,12 @@ pub struct WithdrawResult {
     pub remaining: u128,
 }
 
+#[derive(Drop, Serde)]
+pub struct CollectRewardsResult {
+    /// The total reward amount collected from proxies, before any commission is charged.
+    pub total_amount: u128,
+}
+
 #[starknet::interface]
 pub trait IPool<TContractState> {
     fn stake(ref self: TContractState, amount: u128);
@@ -44,6 +50,10 @@ pub trait IPool<TContractState> {
     fn unstake(ref self: TContractState, amount: u128) -> UnstakeResult;
 
     fn withdraw(ref self: TContractState, queue_id: u128) -> WithdrawResult;
+
+    fn collect_rewards(
+        ref self: TContractState, start_index: u128, end_index: u128
+    ) -> CollectRewardsResult;
 
     fn set_staker(ref self: TContractState, staker: ContractAddress);
 

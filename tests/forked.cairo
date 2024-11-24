@@ -209,3 +209,25 @@ fn test_staked_token_deflation() {
     assert_eq!(contracts.staked_token.balance_of(accounts.alice.address), 46_000000000000000000);
     assert_eq!(contracts.pool.get_total_stake(), 92_000000000000000000);
 }
+
+#[test]
+#[fork("SEPOLIA_332200")]
+fn test_reward_collection() {
+    let Setup { contracts, accounts } = setup_sepolia();
+
+    accounts.alice.strk.approve(contracts.pool.contract_address, Bounded::MAX);
+
+    // Alice stakes 250 STRK
+    accounts.alice.pool.stake(250_000000000000000000);
+
+    // Collect rewards after one day
+    start_cheat_block_timestamp_global(get_block_timestamp() + 86400);
+    assert!(accounts.alice.pool.collect_rewards(0, Bounded::MAX).total_amount > 0);
+
+    // Rewards are collected into the pool
+    assert!(contracts.pool.get_total_stake() > 250_000000000000000000);
+
+    // New exchange rate: 1 kSTRK > 1 STRK
+    accounts.alice.pool.unstake(10_000000000000000000);
+    assert!(contracts.strk.balance_of(accounts.alice.address) > 760_000000000000000000);
+}
