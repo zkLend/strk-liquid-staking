@@ -374,6 +374,7 @@ pub mod Pool {
         }
 
         fn set_staker(ref self: ContractState, staker: ContractAddress) {
+            OwnableComponent::InternalTrait::assert_only_owner(@self.ownable);
             self.staker.write(staker);
             self.emit(Event::StakerUpdated(StakerUpdated { staker }));
         }
