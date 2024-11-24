@@ -1,3 +1,4 @@
+use core::num::traits::Bounded;
 use starknet::get_block_timestamp;
 
 use openzeppelin::token::erc20::interface::IERC20DispatcherTrait;
@@ -13,7 +14,7 @@ fn test_simple_staking() {
     let Setup { contracts, accounts } = setup_sepolia();
 
     let amount = 225_000000000000000000_u128;
-    accounts.alice.strk.approve(contracts.pool.contract_address, amount.into());
+    accounts.alice.strk.approve(contracts.pool.contract_address, Bounded::MAX);
     accounts.alice.pool.stake(amount);
 
     assert_eq!(contracts.pool.get_total_stake(), amount);
@@ -27,7 +28,7 @@ fn test_fully_fulfilled_unstake() {
     let Setup { contracts, accounts } = setup_sepolia();
 
     let stake_amount = 225_000000000000000000_u128;
-    accounts.alice.strk.approve(contracts.pool.contract_address, stake_amount.into());
+    accounts.alice.strk.approve(contracts.pool.contract_address, Bounded::MAX);
     accounts.alice.pool.stake(stake_amount);
 
     // Alice balance: 775
@@ -54,7 +55,7 @@ fn test_partially_fulfilled_unstake() {
     let Setup { contracts, accounts } = setup_sepolia();
 
     let stake_amount = 225_000000000000000000_u128;
-    accounts.alice.strk.approve(contracts.pool.contract_address, stake_amount.into());
+    accounts.alice.strk.approve(contracts.pool.contract_address, Bounded::MAX);
     accounts.alice.pool.stake(stake_amount);
 
     // Alice balance: 775
@@ -94,7 +95,7 @@ fn test_unfulfilled_unstake() {
     let Setup { contracts, accounts } = setup_sepolia();
 
     let stake_amount = 800_000000000000000000_u128;
-    accounts.alice.strk.approve(contracts.pool.contract_address, stake_amount.into());
+    accounts.alice.strk.approve(contracts.pool.contract_address, Bounded::MAX);
     accounts.alice.pool.stake(stake_amount);
 
     // Alice balance: 200
@@ -134,7 +135,7 @@ fn test_reuse_proxy() {
     let Setup { contracts, accounts } = setup_sepolia();
 
     let stake_amount = 600_000000000000000000_u128;
-    accounts.alice.strk.approve(contracts.pool.contract_address, stake_amount.into());
+    accounts.alice.strk.approve(contracts.pool.contract_address, Bounded::MAX);
     accounts.alice.pool.stake(stake_amount);
 
     // Alice unstakes 210 to deactivate 3 proxies
@@ -163,7 +164,6 @@ fn test_reuse_proxy() {
 
     // Alices stakes 400, creating 4 new trenches
     let stake_amount = 400_000000000000000000_u128;
-    accounts.alice.strk.approve(contracts.pool.contract_address, stake_amount.into());
     accounts.alice.pool.stake(stake_amount);
 
     // 3 proxied are reused. Only 1 new proxy is deployed.
@@ -176,4 +176,36 @@ fn test_reuse_proxy() {
             standby_proxy_count: 0,
         }
     );
+}
+
+#[test]
+#[fork("SEPOLIA_332200")]
+fn test_staked_token_deflation() {
+    let Setup { contracts, accounts } = setup_sepolia();
+
+    accounts.alice.strk.approve(contracts.pool.contract_address, Bounded::MAX);
+
+    // Alice stakes 50 STRK; gets 50 kSTRK back.
+    accounts.alice.pool.stake(50_000000000000000000);
+    assert_eq!(contracts.staked_token.balance_of(accounts.alice.address), 50_000000000000000000);
+
+    // Simulates a 20% return from rewards by sending unsolicited STRK to pool
+    accounts.strk_faucet.strk.transfer(contracts.pool.contract_address, 10_000000000000000000);
+
+    // Exchange rate: 1 kSTRK = 1.2 STRK
+    assert_eq!(contracts.strk.balance_of(accounts.alice.address), 950_000000000000000000);
+    accounts.alice.pool.unstake(10_000000000000000000);
+    assert_eq!(contracts.strk.balance_of(accounts.alice.address), 962_000000000000000000);
+    assert_eq!(contracts.staked_token.balance_of(accounts.alice.address), 40_000000000000000000);
+
+    // Pool size: 48 STRK; kSTRK supply: 40
+    assert_eq!(contracts.pool.get_total_stake(), 48_000000000000000000);
+
+    // Adds 32 STRK to the pool to set exchange rate: 1 kSTRK = 2 STRK
+    accounts.strk_faucet.strk.transfer(contracts.pool.contract_address, 32_000000000000000000);
+
+    // Alice puts the 12 STRK back; gets 6 kSTRK only
+    accounts.alice.pool.stake(12_000000000000000000);
+    assert_eq!(contracts.staked_token.balance_of(accounts.alice.address), 46_000000000000000000);
+    assert_eq!(contracts.pool.get_total_stake(), 92_000000000000000000);
 }

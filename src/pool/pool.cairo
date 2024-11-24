@@ -152,6 +152,7 @@ pub mod Pool {
         pub const POOL_BALANCE_OVERFLOW: felt252 = 'PL_POOL_BALANCE_OVERFLOW';
         pub const DELEGATION_NOT_OPEN: felt252 = 'PL_DELEGATION_NOT_OPEN';
         pub const NOT_RECIPIENT: felt252 = 'PL_NOT_RECIPIENT';
+        pub const UNSTAKE_AMOUNT_OVERFLOW: felt252 = 'PL_UNSTAKE_AMOUNT_OVERFLOW';
     }
 
     #[constructor]
@@ -213,15 +214,7 @@ pub mod Pool {
         }
 
         fn get_total_stake(self: @ContractState) -> u128 {
-            self
-                .strk_token
-                .read()
-                .balance_of(get_contract_address())
-                .try_into()
-                .expect(Errors::POOL_BALANCE_OVERFLOW)
-                + (self.trench_size.read()
-                    * (self.active_proxy_count.read() + self.get_exiting_proxy_count()))
-                - self.withdrawal_queue_total_size.read()
+            InternalTrait::get_total_stake(self)
         }
 
         fn get_proxy_stats(self: @ContractState) -> ProxyStats {
@@ -260,13 +253,28 @@ pub mod Pool {
             let strk_token = self.strk_token.read();
             let staked_token = self.staked_token.read();
 
+            let pool_size_before = InternalTrait::get_total_stake(@self);
+
             assert(
                 strk_token.transfer_from(staker, get_contract_address(), amount.into()),
                 Errors::TRANSFER_FROM_FAILED
             );
 
-            // TODO: calculate correct proportional amount
-            staked_token.mint(staker, amount.into());
+            let current_staked_token_supply = IERC20Dispatcher {
+                contract_address: staked_token.contract_address
+            }
+                .total_supply();
+
+            let mint_amount = if current_staked_token_supply.is_zero() {
+                // This is the first staker. We match the amount to set the initial exchange rate to
+                // exactly 1.
+                amount.into()
+            } else {
+                // Exchange rate stays unchanged
+                amount.into() * current_staked_token_supply / pool_size_before.into()
+            };
+
+            staked_token.mint(staker, mint_amount);
 
             self.settle_open_trench();
         }
@@ -277,10 +285,25 @@ pub mod Pool {
             assert(!amount.is_zero(), Errors::ZERO_AMOUNT);
 
             let staked_token = self.staked_token.read();
+            let staked_token_supply_before_burn = IERC20Dispatcher {
+                contract_address: staked_token.contract_address
+            }
+                .total_supply();
             staked_token.burn(staker, amount.into());
 
-            // TODO: calculate correct proportional amount
-            let unstake_amount = amount;
+            let pool_size = InternalTrait::get_total_stake(@self);
+
+            let unstake_amount = if staked_token_supply_before_burn == amount.into() {
+                // The whole pool is cleared
+                pool_size
+            } else {
+                // Exchange rate stays unchanged
+                (Into::<u128, u256>::into(amount)
+                    * pool_size.into()
+                    / staked_token_supply_before_burn)
+                    .try_into()
+                    .expect(Errors::UNSTAKE_AMOUNT_OVERFLOW)
+            };
 
             // Queue new withdrawal
             //
@@ -599,6 +622,18 @@ pub mod Pool {
                 .try_into()
                 .expect(Errors::POOL_BALANCE_OVERFLOW)
                 - self.withdrawal_queue_withdrawable_size.read()
+        }
+
+        fn get_total_stake(self: @ContractState) -> u128 {
+            self
+                .strk_token
+                .read()
+                .balance_of(get_contract_address())
+                .try_into()
+                .expect(Errors::POOL_BALANCE_OVERFLOW)
+                + (self.trench_size.read()
+                    * (self.active_proxy_count.read() + self.get_exiting_proxy_count()))
+                - self.withdrawal_queue_total_size.read()
         }
 
         fn get_exiting_proxy_count(self: @ContractState) -> u128 {
