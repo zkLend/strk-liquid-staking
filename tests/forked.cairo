@@ -231,3 +231,23 @@ fn test_reward_collection() {
     accounts.alice.pool.unstake(10_000000000000000000);
     assert!(contracts.strk.balance_of(accounts.alice.address) > 760_000000000000000000);
 }
+
+#[test]
+#[fork("SEPOLIA_332200")]
+fn test_pre_deactivation_reward_collection() {
+    let Setup { contracts, accounts } = setup_sepolia();
+
+    accounts.alice.strk.approve(contracts.pool.contract_address, Bounded::MAX);
+
+    // Alice stakes 250 STRK
+    accounts.alice.pool.stake(250_000000000000000000);
+
+    // One day elapses
+    start_cheat_block_timestamp_global(get_block_timestamp() + 86400);
+
+    // Alice unstakes 60 STRK to trigger 1 deactivation
+    accounts.alice.pool.unstake(60_000000000000000000);
+
+    // Rewards are collected into the pool
+    assert!(contracts.pool.get_total_stake() > 190_000000000000000000);
+}

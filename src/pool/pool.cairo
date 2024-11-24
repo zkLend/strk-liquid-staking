@@ -372,6 +372,8 @@ pub mod Pool {
                         .claim_rewards(current_proxy.contract.contract_address);
                 };
 
+            // TODO: emit event for indexing
+
             self.settle_open_trench();
 
             CollectRewardsResult { total_amount }
@@ -388,7 +390,13 @@ pub mod Pool {
         fn settle_open_trench(ref self: ContractState) {
             Self::settle_proxy_exits(ref self);
             Self::fulfill_withdrawal_queue(ref self);
-            Self::deactivate_proxies(ref self);
+
+            if !Self::deactivate_proxies(ref self).is_zero() {
+                // Attempt to fulfill withdrawals again if rewards are claimed during the process of
+                // proxy deactivation.
+                Self::fulfill_withdrawal_queue(ref self);
+            }
+
             Self::create_new_trenches(ref self);
         }
 
@@ -467,7 +475,9 @@ pub mod Pool {
             }
         }
 
-        fn deactivate_proxies(ref self: ContractState) {
+        fn deactivate_proxies(ref self: ContractState) -> u128 {
+            let mut final_rewards_collected = 0;
+
             let withdrawal_fulfillment_shortfall = self.withdrawal_queue_total_size.read()
                 - self.withdrawal_queue_withdrawable_size.read();
 
@@ -486,14 +496,17 @@ pub mod Pool {
 
                     for ind in 0
                         ..proxies_to_deactivate {
-                            // TODO: collect rewards before deactivating
-
                             // It's okay to leave storage untouched as `active_proxy_count` acts as
                             // a cursor to the final item. It's also optimal to not clear storage as
                             // Starknet charges for doing so.
                             let current_proxy = self
                                 .active_proxies
                                 .read(active_proxy_count_before - ind - 1);
+
+                            // Collect any pending rewards before exiting
+                            final_rewards_collected += current_proxy
+                                .delegation_pool
+                                .claim_rewards(current_proxy.contract.contract_address);
 
                             current_proxy
                                 .contract
@@ -519,6 +532,10 @@ pub mod Pool {
                         .write(first_available_inactive_index + proxies_to_deactivate);
                 }
             }
+
+            // TODO: emit event for indexing
+
+            final_rewards_collected
         }
 
         fn create_new_trenches(ref self: ContractState) {
