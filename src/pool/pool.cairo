@@ -137,12 +137,50 @@ pub mod Pool {
         #[flat]
         UpgradeableEvent: UpgradeableComponent::Event,
         StakerUpdated: StakerUpdated,
-        // TODO: add events for offchain indexing
+        Staked: Staked,
+        Unstaked: Unstaked,
+        Withdrawal: Withdrawal,
+        UnstakeFinished: UnstakeFinished,
+        RewardsCollected: RewardsCollected,
     }
 
     #[derive(Drop, starknet::Event)]
     struct StakerUpdated {
         staker: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct Staked {
+        staker: ContractAddress,
+        strk_amount: u128,
+        staked_token_amount: u128,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct Unstaked {
+        staker: ContractAddress,
+        queue_id: u128,
+        staked_token_amount: u128,
+        strk_amount: u128,
+        fulfilled_amount: u128,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct Withdrawal {
+        queue_id: u128,
+        fulfilled_amount: u128,
+        remaining_amount: u128,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UnstakeFinished {
+        queue_id: u128,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct RewardsCollected {
+        collector: ContractAddress,
+        total_amount: u128,
     }
 
     pub mod Errors {
@@ -156,6 +194,7 @@ pub mod Pool {
         pub const POOL_BALANCE_OVERFLOW: felt252 = 'PL_POOL_BALANCE_OVERFLOW';
         pub const DELEGATION_NOT_OPEN: felt252 = 'PL_DELEGATION_NOT_OPEN';
         pub const ZERO_RECIPIENT: felt252 = 'PL_ZERO_RECIPIENT';
+        pub const MINT_AMOUNT_OVERFLOW: felt252 = 'PL_MINT_AMOUNT_OVERFLOW';
         pub const UNSTAKE_AMOUNT_OVERFLOW: felt252 = 'PL_UNSTAKE_AMOUNT_OVERFLOW';
     }
 
@@ -289,6 +328,17 @@ pub mod Pool {
 
             staked_token.mint(staker, mint_amount);
 
+            self
+                .emit(
+                    Staked {
+                        staker,
+                        strk_amount: amount,
+                        staked_token_amount: mint_amount
+                            .try_into()
+                            .expect(Errors::MINT_AMOUNT_OVERFLOW)
+                    }
+                );
+
             self.settle_open_trench();
         }
 
@@ -340,6 +390,21 @@ pub mod Pool {
             self.settle_open_trench();
 
             let withdraw_result = InternalTrait::withdraw(ref self, queue_id);
+            self
+                .emit(
+                    Unstaked {
+                        staker,
+                        queue_id,
+                        staked_token_amount: amount,
+                        strk_amount: unstake_amount,
+                        fulfilled_amount: withdraw_result.fulfilled,
+                    }
+                );
+
+            if withdraw_result.fulfilled == unstake_amount {
+                self.emit(UnstakeFinished { queue_id });
+            }
+
             UnstakeResult {
                 queue_id, total_amount: unstake_amount, amount_fulfilled: withdraw_result.fulfilled
             }
@@ -349,7 +414,22 @@ pub mod Pool {
             // This is necessary to account for any passive fund inflows
             self.settle_open_trench();
 
-            InternalTrait::withdraw(ref self, queue_id)
+            let result = InternalTrait::withdraw(ref self, queue_id);
+            if !result.fulfilled.is_zero() {
+                self
+                    .emit(
+                        Withdrawal {
+                            queue_id,
+                            fulfilled_amount: result.fulfilled,
+                            remaining_amount: result.remaining,
+                        }
+                    );
+            }
+            if result.remaining.is_zero() {
+                self.emit(UnstakeFinished { queue_id });
+            }
+
+            result
         }
 
         fn collect_rewards(
@@ -366,7 +446,7 @@ pub mod Pool {
                         .claim_rewards(current_proxy.contract.contract_address);
                 };
 
-            // TODO: emit event for indexing
+            self.emit(RewardsCollected { collector: get_caller_address(), total_amount });
 
             self.settle_open_trench();
 
@@ -528,7 +608,14 @@ pub mod Pool {
                 }
             }
 
-            // TODO: emit event for indexing
+            if !final_rewards_collected.is_zero() {
+                self
+                    .emit(
+                        RewardsCollected {
+                            collector: get_caller_address(), total_amount: final_rewards_collected
+                        }
+                    );
+            }
 
             final_rewards_collected
         }
