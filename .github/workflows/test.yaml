@@ -4,23 +4,35 @@ on:
       - "master"
   pull_request:
 
-name: "Build"
+name: "Test"
 jobs:
   test:
-    name: "Compile contracts"
+    name: "Run tests"
     runs-on: "ubuntu-latest"
     steps:
       - name: "Checkout source code"
         uses: "actions/checkout@v4"
 
+      - name: "Install snfoundryup"
+        run: |
+          curl -L https://raw.githubusercontent.com/foundry-rs/starknet-foundry/master/scripts/install.sh | sh
+
+      - name: "Run snfoundryup"
+        run: |
+          snfoundryup
+
       - name: "Install scarb"
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://docs.swmansion.com/scarb/install.sh | sh -s -- -v 2.8.5
+
+      - name: "Print snforge version"
+        run: |
+          snforge --version
 
       - name: "Print scarb version"
         run: |
           scarb --version
 
-      - name: "Build contracts"
+      - name: "Run tests"
         run: |
-          scarb build
+          scarb test --verbosity verbose
