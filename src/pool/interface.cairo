@@ -57,7 +57,11 @@ pub trait IPool<TContractState> {
 
     fn set_staker(ref self: TContractState, staker: ContractAddress);
 
+    fn get_strk_token(self: @TContractState) -> ContractAddress;
+
     fn get_staked_token(self: @TContractState) -> ContractAddress;
+
+    fn get_unstake_delay(self: @TContractState) -> u64;
 
     fn get_total_stake(self: @TContractState) -> u128;
 

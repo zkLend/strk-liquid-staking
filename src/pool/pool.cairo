@@ -261,8 +261,16 @@ pub mod Pool {
             ReentrancyGuardComponent::InternalTrait::end(ref self.reentrancy_guard);
         }
 
+        fn get_strk_token(self: @ContractState) -> ContractAddress {
+            self.strk_token.read().contract_address
+        }
+
         fn get_staked_token(self: @ContractState) -> ContractAddress {
             self.staked_token.read().contract_address
+        }
+
+        fn get_unstake_delay(self: @ContractState) -> u64 {
+            self.unstake_delay.read()
         }
 
         fn get_total_stake(self: @ContractState) -> u128 {
