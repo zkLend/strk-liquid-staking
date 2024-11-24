@@ -155,7 +155,7 @@ pub mod Pool {
         pub const TRANSFER_FAILED: felt252 = 'PL_TRANSFER_FAILED';
         pub const POOL_BALANCE_OVERFLOW: felt252 = 'PL_POOL_BALANCE_OVERFLOW';
         pub const DELEGATION_NOT_OPEN: felt252 = 'PL_DELEGATION_NOT_OPEN';
-        pub const NOT_RECIPIENT: felt252 = 'PL_NOT_RECIPIENT';
+        pub const ZERO_RECIPIENT: felt252 = 'PL_ZERO_RECIPIENT';
         pub const UNSTAKE_AMOUNT_OVERFLOW: felt252 = 'PL_UNSTAKE_AMOUNT_OVERFLOW';
     }
 
@@ -339,7 +339,7 @@ pub mod Pool {
 
             self.settle_open_trench();
 
-            let withdraw_result = self.withdraw_checked(queue_id);
+            let withdraw_result = InternalTrait::withdraw(ref self, queue_id);
             UnstakeResult {
                 queue_id, total_amount: unstake_amount, amount_fulfilled: withdraw_result.fulfilled
             }
@@ -349,13 +349,7 @@ pub mod Pool {
             // This is necessary to account for any passive fund inflows
             self.settle_open_trench();
 
-            let staker = get_caller_address();
-            assert(!staker.is_zero(), Errors::ZERO_STAKER);
-
-            let queue_item = self.queued_withdrawals.read(queue_id);
-            assert(staker == queue_item.recipient, Errors::NOT_RECIPIENT);
-
-            self.withdraw_checked(queue_id)
+            InternalTrait::withdraw(ref self, queue_id)
         }
 
         fn collect_rewards(
@@ -602,9 +596,10 @@ pub mod Pool {
             }
         }
 
-        fn withdraw_checked(ref self: ContractState, queue_id: u128) -> WithdrawResult {
+        fn withdraw(ref self: ContractState, queue_id: u128) -> WithdrawResult {
             let active_cursor = self.active_queued_withdrawal_cursor.read();
             let queue_item = self.queued_withdrawals.read(queue_id);
+            assert(!queue_item.recipient.is_zero(), Errors::ZERO_RECIPIENT);
 
             let result = if active_cursor < queue_id {
                 // Item fully pending. Nothing to do.
