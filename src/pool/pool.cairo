@@ -43,7 +43,7 @@ pub mod Pool {
     use openzeppelin::upgrades::upgradeable::UpgradeableComponent;
     use strk_liquid_staking::pool::interface::{
         ActiveProxy, CollectRewardsResult, IPool, InactiveProxy, ProxyStats, UnstakeResult,
-        WithdrawResult
+        WithdrawalInfo, WithdrawalQueueStats, WithdrawResult,
     };
     use strk_liquid_staking::proxy::interface::{IProxyDispatcher, IProxyDispatcherTrait};
     use strk_liquid_staking::staked_token::interface::{
@@ -287,6 +287,36 @@ pub mod Pool {
                 active_proxy_count: self.active_proxy_count.read(),
                 exiting_proxy_count: next_inactive_proxy_index - exited_proxy_cursor,
                 standby_proxy_count: exited_proxy_cursor - reused_proxy_cursor,
+            }
+        }
+
+        fn get_withdrawal_queue_stats(self: @ContractState) -> WithdrawalQueueStats {
+            WithdrawalQueueStats {
+                total_withdrawal_count: self.queued_withdrawal_count.read(),
+                fully_fulfilled_withdrawal_count: self.active_queued_withdrawal_cursor.read(),
+            }
+        }
+
+        fn get_withdrawal_info(self: @ContractState, queue_id: u128) -> Option<WithdrawalInfo> {
+            let queue_item = self.queued_withdrawals.read(queue_id);
+            if queue_item.recipient.is_zero() {
+                Option::None
+            } else {
+                let active_cursor = self.active_queued_withdrawal_cursor.read();
+
+                Option::Some(
+                    WithdrawalInfo {
+                        recipient: queue_item.recipient,
+                        amount_remaining: queue_item.amount_remaining,
+                        amount_withdrawable: if active_cursor > queue_id {
+                            queue_item.amount_remaining
+                        } else if active_cursor == queue_id {
+                            queue_item.amount_withdrawable
+                        } else {
+                            0
+                        },
+                    }
+                )
             }
         }
 
