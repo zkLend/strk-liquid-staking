@@ -2,7 +2,6 @@ use starknet::ContractAddress;
 use starknet::SyscallResultTrait;
 use starknet::syscalls::deploy_syscall;
 
-use contracts::types::{Amount, Commission};
 use snforge_std::DeclareResultTrait;
 use strk_liquid_staking::pool::interface::{CollectRewardsResult, UnstakeResult, WithdrawResult};
 
@@ -13,7 +12,6 @@ use account::{IMockAccountContractDispatcher, IMockAccountContractDispatcherTrai
 pub struct MockAccount {
     pub address: ContractAddress,
     pub strk: MockAccountErc20Caller,
-    pub staking: MockAccountStakingCaller,
     pub pool: MockAccountPoolCaller,
 }
 
@@ -21,12 +19,6 @@ pub struct MockAccount {
 pub struct MockAccountErc20Caller {
     pub account_address: ContractAddress,
     pub token_address: ContractAddress,
-}
-
-#[derive(Drop)]
-pub struct MockAccountStakingCaller {
-    pub account_address: ContractAddress,
-    pub staking_address: ContractAddress,
 }
 
 #[derive(Drop)]
@@ -39,17 +31,6 @@ pub trait IMockAccountErc20Caller {
     fn approve(self: @MockAccountErc20Caller, spender: ContractAddress, amount: u256) -> bool;
 
     fn transfer(self: @MockAccountErc20Caller, recipient: ContractAddress, amount: u256) -> bool;
-}
-
-pub trait IMockAccountStakingCaller {
-    fn stake(
-        self: @MockAccountStakingCaller,
-        reward_address: ContractAddress,
-        operational_address: ContractAddress,
-        amount: Amount,
-        pool_enabled: bool,
-        commission: Commission,
-    );
 }
 
 pub trait IMockAccountPoolCaller {
@@ -67,10 +48,7 @@ pub trait IMockAccountPoolCaller {
 }
 
 pub fn create_mock_account(
-    strk_address: ContractAddress,
-    staking_address: ContractAddress,
-    pool_address: ContractAddress,
-    salt: felt252
+    strk_address: ContractAddress, pool_address: ContractAddress, salt: felt252
 ) -> MockAccount {
     let mock_account_contract_class = snforge_std::declare("MockAccountContract")
         .unwrap()
@@ -85,7 +63,6 @@ pub fn create_mock_account(
         strk: MockAccountErc20Caller {
             account_address: deployed_address, token_address: strk_address
         },
-        staking: MockAccountStakingCaller { account_address: deployed_address, staking_address },
         pool: MockAccountPoolCaller { account_address: deployed_address, pool_address }
     }
 }
@@ -99,27 +76,6 @@ impl IMockAccountErc20CallerImpl of IMockAccountErc20Caller {
     fn transfer(self: @MockAccountErc20Caller, recipient: ContractAddress, amount: u256) -> bool {
         IMockAccountContractDispatcher { contract_address: *self.account_address }
             .erc20_transfer(*self.token_address, recipient, amount)
-    }
-}
-
-impl IMockAccountStakingCallerImpl of IMockAccountStakingCaller {
-    fn stake(
-        self: @MockAccountStakingCaller,
-        reward_address: ContractAddress,
-        operational_address: ContractAddress,
-        amount: Amount,
-        pool_enabled: bool,
-        commission: Commission,
-    ) {
-        IMockAccountContractDispatcher { contract_address: *self.account_address }
-            .staking_stake(
-                *self.staking_address,
-                reward_address,
-                operational_address,
-                amount,
-                pool_enabled,
-                commission
-            )
     }
 }
 

@@ -37,6 +37,7 @@ jobs:
           cat ./target/dev/strk_liquid_staking_Pool.contract_class.json | jq "del(.sierra_program_debug_info.type_names[]) | del(.sierra_program_debug_info.libfunc_names[]) | del(.sierra_program_debug_info.user_func_names[])" > ./artifacts/strk-staking/$COMMIT_HASH/Pool.json
           cat ./target/dev/strk_liquid_staking_Proxy.contract_class.json | jq "del(.sierra_program_debug_info.type_names[]) | del(.sierra_program_debug_info.libfunc_names[]) | del(.sierra_program_debug_info.user_func_names[])" > ./artifacts/strk-staking/$COMMIT_HASH/Proxy.json
           cat ./target/dev/strk_liquid_staking_StakedToken.contract_class.json | jq "del(.sierra_program_debug_info.type_names[]) | del(.sierra_program_debug_info.libfunc_names[]) | del(.sierra_program_debug_info.user_func_names[])" > ./artifacts/strk-staking/$COMMIT_HASH/StakedToken.json
+          cat ./target/dev/strk_liquid_staking_Staker.contract_class.json | jq "del(.sierra_program_debug_info.type_names[]) | del(.sierra_program_debug_info.libfunc_names[]) | del(.sierra_program_debug_info.user_func_names[])" > ./artifacts/strk-staking/$COMMIT_HASH/Staker.json
           rm -rf ./artifacts/strk-staking/latest
           (cd ./artifacts/strk-staking/ && rm -rf ./latest && ln -s ./$COMMIT_HASH ./latest)
           cd ./artifacts
