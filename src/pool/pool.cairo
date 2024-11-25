@@ -557,7 +557,7 @@ pub mod Pool {
 
                     // When looping there's no need to check whether `disposable_amount` is zero, as
                     // we known it's depleted when we cannot fulfill an entire item.
-                    while current_active_cursor <= queued_count {
+                    while current_active_cursor < queued_count {
                         let mut active_item = self.queued_withdrawals.read(current_active_cursor);
 
                         let unfulfilled_amount = active_item.amount_remaining

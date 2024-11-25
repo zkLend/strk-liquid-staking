@@ -77,10 +77,12 @@ fn test_partially_fulfilled_unstake() {
 
     // Immediately withdrawing yields nothing
     assert_eq!(accounts.alice.pool.withdraw(0).fulfilled, 0);
+    assert_eq!(contracts.pool.get_withdrawal_queue_stats().fully_fulfilled_withdrawal_count, 0);
 
     // Can withdraw after 5 minutes as the inactive proxy exits
     start_cheat_block_timestamp_global(get_block_timestamp() + 300);
     assert_eq!(accounts.alice.pool.withdraw(0).fulfilled, 5_000000000000000000);
+    assert_eq!(contracts.pool.get_withdrawal_queue_stats().fully_fulfilled_withdrawal_count, 1);
 
     // Alice balance: 805
     // Open trench balance: 95
