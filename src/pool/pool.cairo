@@ -142,6 +142,7 @@ pub mod Pool {
         Withdrawal: Withdrawal,
         UnstakeFinished: UnstakeFinished,
         RewardsCollected: RewardsCollected,
+        WithdrawalsFulfilled: WithdrawalsFulfilled,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -181,6 +182,11 @@ pub mod Pool {
     struct RewardsCollected {
         collector: ContractAddress,
         total_amount: u128,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct WithdrawalsFulfilled {
+        last_fulfilled_queue_id: u128,
     }
 
     pub mod Errors {
@@ -583,6 +589,12 @@ pub mod Pool {
 
                     if current_active_cursor != original_active_cursor {
                         self.active_queued_withdrawal_cursor.write(current_active_cursor);
+                        self
+                            .emit(
+                                WithdrawalsFulfilled {
+                                    last_fulfilled_queue_id: current_active_cursor - 1
+                                }
+                            );
                     }
                 }
             }
