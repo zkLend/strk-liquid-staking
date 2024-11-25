@@ -234,6 +234,34 @@ fn test_reward_collection() {
 
 #[test]
 #[fork("SEPOLIA_332200")]
+fn test_withdrawal_fulfillment_with_rewards() {
+    let Setup { contracts, accounts } = setup_sepolia();
+
+    accounts.alice.strk.approve(contracts.pool.contract_address, Bounded::MAX);
+
+    // Alice stakes 200 STRK
+    accounts.alice.pool.stake(200_000000000000000000);
+
+    // Alice unstakes 50 STRK; none is fulfilled
+    accounts.alice.pool.unstake(50_000000000000000000);
+    assert_eq!(
+        contracts.pool.get_withdrawal_info(0).unwrap().amount_remaining, 50_000000000000000000
+    );
+    assert_eq!(contracts.pool.get_withdrawal_info(0).unwrap().amount_withdrawable, 0);
+
+    // Collect rewards after 4 minutes
+    start_cheat_block_timestamp_global(get_block_timestamp() + 240);
+    assert!(accounts.alice.pool.collect_rewards(0, Bounded::MAX).total_amount > 0);
+
+    // Rewards are collected into the pool; withdrawal is partially fulfilled
+    assert!(contracts.pool.get_withdrawal_info(0).unwrap().amount_withdrawable > 0);
+
+    // Everything is used to partially fulfill withdrawal
+    assert_eq!(contracts.pool.get_open_trench_balance(), 0);
+}
+
+#[test]
+#[fork("SEPOLIA_332200")]
 fn test_pre_deactivation_reward_collection() {
     let Setup { contracts, accounts } = setup_sepolia();
 
