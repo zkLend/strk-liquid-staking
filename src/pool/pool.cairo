@@ -679,7 +679,9 @@ pub mod Pool {
             if !new_trenches_count.is_zero() {
                 let reused_proxy_cursor = self.reused_proxy_cursor.read();
 
-                let reuse_proxy_count = self.exited_proxy_cursor.read() - reused_proxy_cursor;
+                let reuse_proxy_count = min(
+                    self.exited_proxy_cursor.read() - reused_proxy_cursor, new_trenches_count
+                );
                 let new_proxy_count = new_trenches_count - reuse_proxy_count;
 
                 let strk_token = self.strk_token.read();

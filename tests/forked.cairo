@@ -164,11 +164,26 @@ fn test_reuse_proxy() {
         }
     );
 
-    // Alices stakes 400, creating 4 new trenches
-    let stake_amount = 400_000000000000000000_u128;
+    // Alices stakes 100, creating 1 new trenches
+    let stake_amount = 100_000000000000000000_u128;
     accounts.alice.pool.stake(stake_amount);
 
-    // 3 proxied are reused. Only 1 new proxy is deployed.
+    // 1 proxy is reused; 0 new proxies are deployed.
+    assert_eq!(
+        contracts.pool.get_proxy_stats(),
+        ProxyStats {
+            total_proxy_count: 6,
+            active_proxy_count: 4,
+            exiting_proxy_count: 0,
+            standby_proxy_count: 2,
+        }
+    );
+
+    // Alices stakes 300, creating 3 new trenches
+    let stake_amount = 300_000000000000000000_u128;
+    accounts.alice.pool.stake(stake_amount);
+
+    // 2 proxy is reused; 1 new proxies are deployed.
     assert_eq!(
         contracts.pool.get_proxy_stats(),
         ProxyStats {
