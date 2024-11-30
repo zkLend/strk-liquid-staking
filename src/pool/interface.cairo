@@ -1,21 +1,5 @@
 use starknet::ContractAddress;
 
-use contracts::pool::interface::{IPoolDispatcher as IDelegationPoolDispatcher};
-use strk_liquid_staking::proxy::interface::IProxyDispatcher;
-
-#[derive(Drop, Serde, starknet::Store)]
-pub struct ActiveProxy {
-    pub contract: IProxyDispatcher,
-    pub delegation_pool: IDelegationPoolDispatcher,
-}
-
-#[derive(Drop, Serde, starknet::Store)]
-pub struct InactiveProxy {
-    pub contract: IProxyDispatcher,
-    pub delegation_pool: IDelegationPoolDispatcher,
-    pub initiated_time: u64,
-}
-
 #[derive(Debug, Drop, PartialEq, Serde)]
 pub struct ProxyStats {
     pub total_proxy_count: u128,

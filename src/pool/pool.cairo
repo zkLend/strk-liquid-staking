@@ -42,8 +42,8 @@ pub mod Pool {
     use openzeppelin::upgrades::interface::IUpgradeable;
     use openzeppelin::upgrades::upgradeable::UpgradeableComponent;
     use strk_liquid_staking::pool::interface::{
-        ActiveProxy, CollectRewardsResult, IPool, InactiveProxy, ProxyStats, UnstakeResult,
-        WithdrawalInfo, WithdrawalQueueStats, WithdrawResult,
+        CollectRewardsResult, IPool, ProxyStats, UnstakeResult, WithdrawalInfo,
+        WithdrawalQueueStats, WithdrawResult,
     };
     use strk_liquid_staking::proxy::interface::{IProxyDispatcher, IProxyDispatcherTrait};
     use strk_liquid_staking::staked_token::interface::{
@@ -101,6 +101,20 @@ pub mod Pool {
         withdrawal_queue_withdrawable_size: u128,
         queued_withdrawals: Map<u128, QueuedWithdrawal>,
     }
+
+    #[derive(Drop, starknet::Store)]
+    struct ActiveProxy {
+        contract: IProxyDispatcher,
+        delegation_pool: IDelegationPoolDispatcher,
+    }
+
+    #[derive(Drop, starknet::Store)]
+    pub struct InactiveProxy {
+        contract: IProxyDispatcher,
+        delegation_pool: IDelegationPoolDispatcher,
+        initiated_time: u64,
+    }
+
 
     #[derive(Drop, starknet::Store)]
     struct QueuedWithdrawal {
@@ -605,25 +619,27 @@ pub mod Pool {
 
             let withdrawal_fulfillment_shortfall = self.withdrawal_queue_total_size.read()
                 - self.withdrawal_queue_withdrawable_size.read();
+            let trench_size = self.trench_size.read();
 
-            if !withdrawal_fulfillment_shortfall.is_zero() {
-                let trench_size = self.trench_size.read();
-                let trenches_needed = (withdrawal_fulfillment_shortfall + trench_size - 1)
-                    / trench_size;
+            let trenches_needed = (withdrawal_fulfillment_shortfall + trench_size - 1)
+                / trench_size;
+            let exiting_proxy_count = self.get_exiting_proxy_count();
 
-                let exiting_proxy_count = self.get_exiting_proxy_count();
+            if exiting_proxy_count != trenches_needed {
+                let active_proxy_count_before = self.active_proxy_count.read();
+                let first_available_inactive_index = self.next_inactive_proxy_index.read();
+
                 if exiting_proxy_count < trenches_needed {
-                    let timestamp = get_block_timestamp();
+                    // More proxies need to exit
 
-                    let active_proxy_count_before = self.active_proxy_count.read();
-                    let first_available_inactive_index = self.next_inactive_proxy_index.read();
+                    let timestamp = get_block_timestamp();
                     let proxies_to_deactivate = trenches_needed - exiting_proxy_count;
 
                     for ind in 0
                         ..proxies_to_deactivate {
-                            // It's okay to leave storage untouched as `active_proxy_count` acts as
-                            // a cursor to the final item. It's also optimal to not clear storage as
-                            // Starknet charges for doing so.
+                            // It's okay to leave storage untouched as `active_proxy_count` acts
+                            // as a cursor to the final item. It's also optimal to not clear
+                            // storage as Starknet charges for doing so.
                             let current_proxy = self
                                 .active_proxies
                                 .read(active_proxy_count_before - ind - 1);
@@ -648,14 +664,37 @@ pub mod Pool {
                                     }
                                 );
                         };
+                } else {
+                    // Too many proxies exiting; reactivate some
+                    let proxies_to_reactivate = exiting_proxy_count - trenches_needed;
 
-                    self
-                        .active_proxy_count
-                        .write(active_proxy_count_before - proxies_to_deactivate);
-                    self
-                        .next_inactive_proxy_index
-                        .write(first_available_inactive_index + proxies_to_deactivate);
+                    for ind in 0
+                        ..proxies_to_reactivate {
+                            let current_proxy = self
+                                .inactive_proxies
+                                .read(first_available_inactive_index - ind - 1);
+
+                            // Amount of zero means cancelling intent
+                            current_proxy.contract.exit_intent(current_proxy.delegation_pool, 0);
+
+                            self
+                                .active_proxies
+                                .write(
+                                    active_proxy_count_before + ind,
+                                    ActiveProxy {
+                                        contract: current_proxy.contract,
+                                        delegation_pool: current_proxy.delegation_pool,
+                                    }
+                                );
+                        }
                 }
+
+                self
+                    .active_proxy_count
+                    .write(active_proxy_count_before + exiting_proxy_count - trenches_needed);
+                self
+                    .next_inactive_proxy_index
+                    .write(first_available_inactive_index + trenches_needed - exiting_proxy_count);
             }
 
             if !final_rewards_collected.is_zero() {

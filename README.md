@@ -147,11 +147,7 @@ There are several ways that withdrawal requests in the queue can be fulfilled:
 Based on the above rules, given a trench size of _T_, it can be concluded that these invariants hold at any given moment in the protocol.
 
 1. Either the open trench or the withdrawal queue is empty.
-2. Denote as _U_ the number of inflight undelegating trenches, and _W_ the total amount of funds in the withdrawal queue, then this holds: `W <= U * T`.
-
-> [!NOTE]
->
-> It's possible that there are more inflight undelegating trenches than needed for the entirety of the withdrawal queue (i.e. `W <= (U - 1) * T`). This is normal and can be caused by the queue being (partially) fulfilled by new deposits.
+2. Denote as _U_ the number of inflight undelegating trenches, and _W_ the total amount of funds in the withdrawal queue, then this holds: `(U - 1) * T < W <= U * T`.
 
 ### Trench size considerations
 

@@ -296,3 +296,52 @@ fn test_pre_deactivation_reward_collection() {
     // Rewards are collected into the pool
     assert!(contracts.pool.get_total_stake() > 190_000000000000000000);
 }
+
+#[test]
+#[fork("SEPOLIA_332200")]
+fn test_proxy_exit_cancellation() {
+    let Setup { contracts, accounts } = setup_sepolia();
+
+    // Alice stakes 300 STRK
+    accounts.alice.strk.approve(contracts.pool.contract_address, Bounded::MAX);
+    accounts.alice.pool.stake(300_000000000000000000_u128);
+
+    // Alice unstakes 120 STRK, deactivating 2 proxies
+    accounts.alice.pool.unstake(120_000000000000000000);
+    assert_eq!(
+        contracts.pool.get_proxy_stats(),
+        ProxyStats {
+            total_proxy_count: 3,
+            active_proxy_count: 1,
+            exiting_proxy_count: 2,
+            standby_proxy_count: 0,
+        }
+    );
+    assert_eq!(contracts.pool.get_open_trench_balance(), 0);
+
+    // Alice stakes 30 STRK, partially fulfilling the queue, re-activating 1 proxy
+    accounts.alice.pool.stake(30_000000000000000000);
+    assert_eq!(
+        contracts.pool.get_proxy_stats(),
+        ProxyStats {
+            total_proxy_count: 3,
+            active_proxy_count: 2,
+            exiting_proxy_count: 1,
+            standby_proxy_count: 0,
+        }
+    );
+    assert_eq!(contracts.pool.get_open_trench_balance(), 0);
+
+    // Alice stakes 110 STRK, fully fulfilling the queue, re-activating 1 proxy
+    accounts.alice.pool.stake(110_000000000000000000);
+    assert_eq!(
+        contracts.pool.get_proxy_stats(),
+        ProxyStats {
+            total_proxy_count: 3,
+            active_proxy_count: 3,
+            exiting_proxy_count: 0,
+            standby_proxy_count: 0,
+        }
+    );
+    assert_eq!(contracts.pool.get_open_trench_balance(), 20_000000000000000000);
+}
